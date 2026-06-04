@@ -1,0 +1,27 @@
+{
+  "name": "@async/pipeline-adapter-lima",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit -p tsconfig.build.json",
+    "pack:check": "npm pack --dry-run"
+  },
+  "dependencies": {
+    "@async/pipeline-core": "workspace:*",
+    "@async/pipeline-node": "workspace:*"
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=20"
+  }
+}

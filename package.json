@@ -1,0 +1,22 @@
+{
+  "name": "async-pipeline-workspace",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "packageManager": "pnpm@10.20.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "pnpm -r --sort build",
+    "typecheck": "pnpm build && pnpm -r --sort typecheck",
+    "test": "pnpm build && node --test tests/*.test.js",
+    "async-pipeline": "node packages/pipeline-node/dist/cli.js",
+    "pack:check": "pnpm -r --filter './packages/*' pack:check",
+    "release:check": "pnpm typecheck && pnpm test && pnpm async-pipeline run verify && pnpm pack:check"
+  },
+  "devDependencies": {
+    "@types/node": "24.12.4",
+    "typescript": "6.0.3"
+  }
+}

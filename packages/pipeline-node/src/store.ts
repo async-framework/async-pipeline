@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join, relative } from "node:path";
-import type { ExecutionRecord, NormalizedPipeline, NormalizedTask, TaskResult } from "@async/pipeline-core";
+import type { CandidateContext, ExecutionRecord, NormalizedPipeline, NormalizedTask, TaskResult, TaskSourceContext, TaskStep } from "@async/pipeline-core";
 import { expandInputs } from "@async/pipeline-core";
 
 export interface PipelineStore {
@@ -9,15 +9,18 @@ export interface PipelineStore {
   asyncDir: string;
   runsDir: string;
   cacheDir: string;
+  sourcesDir: string;
 }
 
 export async function createStore(root: string): Promise<PipelineStore> {
   const asyncDir = join(root, ".async");
   const runsDir = join(asyncDir, "runs");
   const cacheDir = join(asyncDir, "cache", "tasks");
+  const sourcesDir = join(asyncDir, "sources");
   await mkdir(runsDir, { recursive: true });
   await mkdir(cacheDir, { recursive: true });
-  return { root, asyncDir, runsDir, cacheDir };
+  await mkdir(sourcesDir, { recursive: true });
+  return { root, asyncDir, runsDir, cacheDir, sourcesDir };
 }
 
 export async function writeExecution(store: PipelineStore, record: ExecutionRecord): Promise<void> {
@@ -48,11 +51,26 @@ export async function writeCacheEntry(store: PipelineStore, cacheKey: string, re
   await writeFile(join(cacheEntryDir, "result.json"), `${JSON.stringify(result, null, 2)}\n`, "utf8");
 }
 
-export async function computeTaskCacheKey(pipeline: NormalizedPipeline, taskDefinition: NormalizedTask, cwd: string): Promise<string> {
+export interface TaskCacheKeyOptions {
+  steps?: TaskStep[];
+  candidate?: CandidateContext;
+  source?: TaskSourceContext;
+  prepareCommands?: string[];
+}
+
+export async function computeTaskCacheKey(
+  pipeline: NormalizedPipeline,
+  taskDefinition: NormalizedTask,
+  cwd: string,
+  options: TaskCacheKeyOptions = {}
+): Promise<string> {
   const hash = createHash("sha256");
   hash.update(JSON.stringify({
     pipeline: pipeline.name,
     task: taskDefinition.id,
+    source: options.source ?? taskDefinition.source,
+    candidate: options.candidate,
+    prepareCommands: options.prepareCommands ?? [],
     dependsOn: taskDefinition.dependsOn,
     inputs: taskDefinition.inputs,
     outputs: taskDefinition.outputs,
@@ -62,7 +80,7 @@ export async function computeTaskCacheKey(pipeline: NormalizedPipeline, taskDefi
     timeoutMs: taskDefinition.timeoutMs,
     requires: taskDefinition.requires,
     environment: taskDefinition.environment,
-    steps: taskDefinition.steps.map((step) => typeof step === "function" ? "[function]" : step)
+    steps: serializeSteps(options.steps ?? taskDefinition.steps)
   }));
 
   const expandedInputs = expandInputs(pipeline, taskDefinition.inputs);
@@ -82,6 +100,34 @@ export async function computeTaskCacheKey(pipeline: NormalizedPipeline, taskDefi
   }
 
   return hash.digest("hex");
+}
+
+export async function computeCandidateContext(pipeline: NormalizedPipeline, cwd: string): Promise<CandidateContext> {
+  const hash = createHash("sha256");
+  const inputs = new Set<string>(["pipeline.ts", "pipeline.mjs", "pipeline.js"]);
+  for (const taskDefinition of Object.values(pipeline.tasks)) {
+    for (const input of expandInputs(pipeline, taskDefinition.inputs)) {
+      inputs.add(input);
+    }
+  }
+
+  const inputFiles = await resolveInputFiles(cwd, [...inputs]);
+  for (const input of [...inputs].sort()) {
+    hash.update(input);
+  }
+  for (const input of inputFiles) {
+    hash.update(input);
+    try {
+      hash.update(await readFile(join(cwd, input)));
+    } catch {
+      hash.update("[missing]");
+    }
+  }
+
+  return {
+    dir: cwd,
+    fingerprint: hash.digest("hex")
+  };
 }
 
 export async function resolveInputFiles(cwd: string, inputs: readonly string[]): Promise<string[]> {
@@ -179,6 +225,14 @@ function escapeRegExp(value: string): string {
 
 function normalizePath(path: string): string {
   return path.replaceAll("\\", "/");
+}
+
+function serializeSteps(steps: readonly TaskStep[]): unknown[] {
+  return steps.map((step) => {
+    if (typeof step === "function") return "[function]";
+    if (step.kind === "deferred-shell") return { kind: "deferred-shell" };
+    return step;
+  });
 }
 
 function renderSummary(record: ExecutionRecord): string {

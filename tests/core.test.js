@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { buildGraph, definePipeline, job, sh, task, tasksForJob } from "../packages/pipeline-core/dist/index.js";
+import { buildGraph, composePipelines, definePipeline, job, sh, source, task, tasksForJob } from "../packages/pipeline-core/dist/index.js";
 
 test("orders tasks deterministically with dependencies before dependents", () => {
   const pipeline = definePipeline({
@@ -70,4 +70,105 @@ test("normalizes timeout durations", () => {
   });
 
   assert.equal(pipeline.tasks.build.timeoutMs, 2000);
+});
+
+test("normalizes sources and allows declared external task refs as metadata", () => {
+  let evaluated = 0;
+  const pipeline = definePipeline({
+    name: "design-system",
+    sources: {
+      app: source.path({
+        path: "../app",
+        pipeline: "pipeline.ts",
+        prepare: [sh((ctx) => {
+          evaluated += 1;
+          return sh`echo ${ctx.candidate.dir}`;
+        })]
+      })
+    },
+    tasks: {
+      impact: task({ dependsOn: ["app:test"], run: sh`echo impact` })
+    },
+    jobs: {
+      verifyImpact: job({ target: "impact" })
+    }
+  });
+
+  assert.equal(evaluated, 0);
+  assert.equal(pipeline.sources.app.type, "path");
+  assert.equal(pipeline.sources.app.prepare[0]?.kind, "deferred-shell");
+  assert.deepEqual(tasksForJob(pipeline, "verifyImpact").executionOrder, ["app:test", "impact"]);
+});
+
+test("rejects local task ids containing source namespace delimiter", () => {
+  assert.throws(() => definePipeline({
+    name: "bad",
+    tasks: {
+      "app:test": task({ run: sh`echo bad` })
+    },
+    jobs: {
+      verify: job({ target: "app:test" })
+    }
+  }), /cannot contain ":"/);
+});
+
+test("composes source pipeline tasks into a namespaced graph", () => {
+  const root = definePipeline({
+    name: "root",
+    sources: {
+      app: source.path({ path: "../app" })
+    },
+    tasks: {
+      impact: task({ dependsOn: ["app:test"], run: sh`echo impact` })
+    },
+    jobs: {
+      verifyImpact: job({ target: "impact" })
+    }
+  });
+  const app = definePipeline({
+    name: "app",
+    tasks: {
+      build: task({ run: sh`echo build` }),
+      test: task({ dependsOn: ["build"], run: sh`echo test` })
+    },
+    jobs: {
+      verify: job({ target: "test" })
+    }
+  });
+
+  const composed = composePipelines(root, {
+    app: {
+      pipeline: app,
+      context: { name: "app", dir: "/tmp/app", type: "path" }
+    }
+  });
+
+  assert.deepEqual(tasksForJob(composed, "verifyImpact").executionOrder, ["app:build", "app:test", "impact"]);
+  assert.equal(composed.tasks["app:test"].source.dir, "/tmp/app");
+});
+
+test("detects missing tasks when loaded source metadata is composed", () => {
+  const root = definePipeline({
+    name: "root",
+    sources: {
+      app: source.path({ path: "../app" })
+    },
+    tasks: {
+      impact: task({ dependsOn: ["app:missing"], run: sh`echo impact` })
+    },
+    jobs: {
+      verifyImpact: job({ target: "impact" })
+    }
+  });
+  const app = definePipeline({
+    name: "app",
+    tasks: {
+      test: task({ run: sh`echo test` })
+    },
+    jobs: {
+      verify: job({ target: "test" })
+    }
+  });
+
+  assert.throws(() => composePipelines(root, { app: { pipeline: app } }), /missing task "app:missing"/);
 });

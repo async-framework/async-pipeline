@@ -34,3 +34,42 @@ test("glob inputs are resolved deterministically and included in cache keys", as
     await rm(dir, { force: true, recursive: true });
   }
 });
+
+test("cache keys include candidate, source, and resolved prepare commands", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "async-pipeline-source-cache-"));
+  try {
+    await writeFile(join(dir, "input.txt"), "one\n", "utf8");
+    const pipeline = definePipeline({
+      name: "cache-test",
+      tasks: {
+        test: task({ inputs: ["input.txt"], cache: true, run: sh`echo test` })
+      },
+      jobs: {
+        verify: job({ target: "test" })
+      }
+    });
+
+    const baseOptions = {
+      source: { name: "app", dir, type: "path" },
+      prepareCommands: ["pnpm install"]
+    };
+    const first = await computeTaskCacheKey(pipeline, pipeline.tasks.test, dir, {
+      ...baseOptions,
+      candidate: { dir, fingerprint: "candidate-a" }
+    });
+    const second = await computeTaskCacheKey(pipeline, pipeline.tasks.test, dir, {
+      ...baseOptions,
+      candidate: { dir, fingerprint: "candidate-b" }
+    });
+    const third = await computeTaskCacheKey(pipeline, pipeline.tasks.test, dir, {
+      ...baseOptions,
+      candidate: { dir, fingerprint: "candidate-a" },
+      prepareCommands: ["pnpm install", "pnpm add file:../candidate"]
+    });
+
+    assert.notEqual(first, second);
+    assert.notEqual(first, third);
+  } finally {
+    await rm(dir, { force: true, recursive: true });
+  }
+});

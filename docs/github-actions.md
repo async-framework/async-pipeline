@@ -29,10 +29,11 @@ jobs:
         uses: actions/setup-node@<pinned-sha>
         with:
           node-version: 24
-          cache: pnpm
 
       - name: Enable pnpm
-        run: corepack enable
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.20.0 --activate
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -96,14 +97,55 @@ Add write permissions only when the pipeline actually publishes, comments, deplo
 
 ## Cache
 
-Use package-manager cache for dependency installation:
+`@async/pipeline` task cache is local to the runner unless you explicitly persist `.async/cache`. Many-repo impact runs also reuse warm source checkouts under `.async/sources` within the runner workspace.
+
+If you enable package-manager caching, keep it separate from `@async/pipeline` task caching and verify the package manager is available before the cache integration runs.
+
+## Many-Repo Matrix
+
+For impact runs, keep one static workflow and let the CLI describe the source task matrix:
 
 ```yaml
-with:
-  cache: pnpm
+jobs:
+  plan-impact:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@<pinned-sha>
+      - uses: actions/setup-node@<pinned-sha>
+        with:
+          node-version: 24
+      - run: |
+          corepack enable
+          corepack prepare pnpm@10.20.0 --activate
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - id: matrix
+        run: echo "matrix=$(pnpm --silent async-pipeline matrix verifyImpact --format github)" >> "$GITHUB_OUTPUT"
+
+  impact:
+    needs: plan-impact
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.plan-impact.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@<pinned-sha>
+      - uses: actions/setup-node@<pinned-sha>
+        with:
+          node-version: 24
+      - run: |
+          corepack enable
+          corepack prepare pnpm@10.20.0 --activate
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm async-pipeline run-task "${{ matrix.task }}"
+        env:
+          CI: true
 ```
 
-`@async/pipeline` task cache is local to the runner unless you explicitly persist `.async/cache`. The first tranche does not include remote cache.
+This runs dependent repo tasks inside the current repo's CI runner. It does not generate workflow files or dispatch workflows in consumer repos.
 
 ## CI Mode
 

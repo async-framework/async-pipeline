@@ -6,8 +6,10 @@ Local-first TypeScript pipelines for projects that want one task graph to run on
 
 ## What You Get
 
-- Typed pipeline definitions with `definePipeline`, `task`, `job`, `trigger`, and `sh`.
+- Typed pipeline definitions with `definePipeline`, `task`, `job`, `trigger`, `source`, and `sh`.
 - Task fields for `dependsOn`, `inputs`, `outputs`, `cache`, `retry`, `timeout`, `requires`, `environment`, `steps`, and `run`.
+- Explicit many-repo sources with namespaced task refs such as `storefront:test`.
+- Deferred shell commands with `sh((ctx) => sh\`...\`)` for runtime values like the candidate repo path.
 - Local execution records in `.async/runs/<run-id>/`.
 - Local task cache in `.async/cache/tasks/`.
 - CLI commands for running jobs, running one task, listing, graphing, explaining, and doctor checks.
@@ -117,6 +119,10 @@ async-pipeline list
 async-pipeline graph --format json
 async-pipeline graph --format dot
 async-pipeline explain <task>
+async-pipeline sources list
+async-pipeline sources sync
+async-pipeline metadata --format json
+async-pipeline matrix <job> --format github
 async-pipeline doctor
 ```
 
@@ -138,8 +144,9 @@ jobs:
       - uses: actions/setup-node@<pinned-sha>
         with:
           node-version: 24
-          cache: pnpm
-      - run: corepack enable
+      - run: |
+          corepack enable
+          corepack prepare pnpm@10.20.0 --activate
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - run: pnpm async-pipeline run verify
@@ -156,10 +163,12 @@ The checked-in workflow is [.github/workflows/ci.yml](.github/workflows/ci.yml).
 - [Running locally](docs/local-runs.md)
 - [GitHub Actions setup](docs/github-actions.md)
 - [API reference](docs/api.md)
+- [Many-repo impact runs](docs/many-repo-impact-runs.md)
 
 ## Current Limits
 
 - Task execution is deterministic and sequential today. Parallel scheduling is part of the next tranche.
 - The CLI uses the host runner by default. The Lima adapter is available programmatically and `doctor` checks for `limactl`.
 - Cache is local-first only. Remote cache and shared cache backends are not implemented yet.
+- Many-repo sources are explicit. `@async/pipeline` does not infer reverse dependencies from package manifests or lockfiles.
 - Deno and Ollama are optional future requirements, not runtime dependencies.

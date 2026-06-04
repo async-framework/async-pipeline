@@ -5,7 +5,7 @@ This is the first public API surface for `@async/pipeline`.
 ## Imports
 
 ```ts
-import { definePipeline, job, sh, task, trigger } from "@async/pipeline";
+import { definePipeline, job, sh, source, task, trigger } from "@async/pipeline";
 ```
 
 Subpaths are available for advanced use:
@@ -24,6 +24,7 @@ definePipeline({
   namedInputs: {},
   taskDefaults: {},
   triggers: {},
+  sources: {},
   tasks: {},
   jobs: {}
 });
@@ -37,6 +38,7 @@ Fields:
 | `namedInputs` | Reusable input groups referenced by task `inputs`. |
 | `taskDefaults` | Defaults applied by exact task id or task name segment. |
 | `triggers` | Named trigger declarations. |
+| `sources` | Explicit local or git repos whose `pipeline.ts` can be composed into this graph. |
 | `tasks` | Task map. |
 | `jobs` | Job map. |
 
@@ -61,7 +63,7 @@ Fields:
 
 | Field | Purpose |
 | --- | --- |
-| `dependsOn` | Task ids that must run before this task. |
+| `dependsOn` | Task ids that must run before this task. Use `<source>:<task>` for declared source tasks. |
 | `inputs` | Files or named input groups that affect cache keys. |
 | `outputs` | Files produced by the task. Included in metadata and cache config. |
 | `cache` | `true`, `false`, or cache options. |
@@ -72,6 +74,39 @@ Fields:
 | `run` | One shell command or function step. |
 | `steps` | Multiple shell commands or function steps. |
 
+## source
+
+```ts
+source.path({
+  path: "../admin",
+  pipeline: "pipeline.ts",
+  writable: true,
+  prepare: [sh`pnpm install --frozen-lockfile`]
+});
+
+source.git({
+  url: "https://github.com/acme/storefront.git",
+  ref: "main",
+  pipeline: "pipeline.ts",
+  prepare: [
+    sh`pnpm install --frozen-lockfile`,
+    sh((ctx) => sh`pnpm add @acme/design-system@file:${ctx.candidate.dir}`)
+  ]
+});
+```
+
+Sources are explicit. `@async/pipeline` does not infer reverse dependencies from package manifests or lockfiles.
+
+Use namespaced refs from root tasks:
+
+```ts
+task({
+  dependsOn: ["storefront:test", "admin:test-design-system"]
+})
+```
+
+Path sources with `prepare` require `writable: true` in v1. Git sources use warm checkouts under `.async/sources`.
+
 ## sh
 
 ```ts
@@ -80,7 +115,15 @@ task({
 })
 ```
 
-`sh` creates a shell step. The host runner executes it with `shell: true` from the project root.
+`sh` creates a shell step. The host runner executes it with `shell: true` from the task working directory.
+
+Use deferred `sh` only when runtime context is needed:
+
+```ts
+sh((ctx) => sh`pnpm add @acme/design-system@file:${ctx.candidate.dir}`)
+```
+
+Deferred shell callbacks are metadata-safe. They are not evaluated when a pipeline is imported or read through `metadata`.
 
 ## Function Steps
 
@@ -99,8 +142,11 @@ Function steps receive:
 | --- | --- |
 | `taskId` | Current task id. |
 | `runId` | Current execution id. |
-| `cwd` | Project root. |
+| `cwd` | Current task working directory. Root tasks use the root repo; source tasks use the source checkout. |
 | `env` | Process environment. |
+| `root.dir` | Root pipeline directory. |
+| `candidate` | Candidate repo context: `dir`, `fingerprint`, optional git facts. |
+| `source` | Source repo context for namespaced source tasks and `prepare` steps. |
 | `meta` | Add task metadata to the execution record. |
 | `log` | Append to the task log. |
 | `sh` | Create shell command values. |
@@ -155,7 +201,18 @@ interface ExecutionRecord {
   status: "running" | "passed" | "failed";
   mode: "manual" | "ci";
   tasks: TaskResult[];
+  sources?: Record<string, ExecutionSourceRecord>;
 }
 ```
 
 Task results include status, attempts, cache key, cache hit, timings, error, and metadata.
+
+## Metadata
+
+Pipeline definitions are pure metadata. Importing a `pipeline.ts`, calling `definePipeline`, or running:
+
+```sh
+async-pipeline metadata --format json
+```
+
+does not clone sources, run `prepare`, execute tasks, or evaluate deferred shell callbacks.

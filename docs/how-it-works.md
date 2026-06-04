@@ -8,6 +8,7 @@
 | --- | --- |
 | Pipeline | Graph shape, named tasks, jobs, triggers, named inputs, and defaults. |
 | Task | Work unit, `dependsOn`, `inputs`, `outputs`, cache, retry, timeout, requirements, environment, and steps. |
+| Source | Explicit local or git repo with its own `pipeline.ts`, optional `prepare` steps, and namespaced task refs. |
 | Job | Named entrypoint, trigger binding, target task or tasks, and execution mode. |
 | Execution | One run, status timeline, task results, timings, logs, metadata, cache hits, and artifacts. |
 | Scheduler | Graph resolution, deterministic task order, cache decisions, retries, timeout handling, and fail-fast behavior. |
@@ -49,6 +50,49 @@ export default definePipeline({
 - deterministic task ordering
 - retry and timeout defaults
 
+Pipeline definitions are metadata. `definePipeline`, `source.git`, `source.path`, `task`, `job`, `sh`, and deferred `sh((ctx) => ...)` create data only. They do not clone repos, run commands, or evaluate deferred shell callbacks.
+
+## Source Composition
+
+A root pipeline can declare known dependent repos:
+
+```ts
+import { definePipeline, job, sh, source, task } from "@async/pipeline";
+
+export default definePipeline({
+  name: "design-system",
+  sources: {
+    storefront: source.git({
+      url: "https://github.com/acme/storefront.git",
+      ref: "main",
+      pipeline: "pipeline.ts",
+      prepare: [
+        sh`pnpm install --frozen-lockfile`,
+        sh((ctx) => sh`pnpm add @acme/design-system@file:${ctx.candidate.dir}`)
+      ]
+    })
+  },
+  tasks: {
+    impact: task({ dependsOn: ["storefront:test"] })
+  },
+  jobs: {
+    verifyImpact: job({ target: "impact" })
+  }
+});
+```
+
+The developer owns this dependency map. `@async/pipeline` does not infer who depends on whom.
+
+During execution, the Node runner:
+
+1. Resolves or fetches each needed source.
+2. Loads that source's pipeline metadata.
+3. Namespaces source tasks as `<source>:<task>`.
+4. Runs source `prepare` steps inside the source checkout.
+5. Runs source tasks with `cwd` set to that checkout.
+
+Git sources are kept warm under `.async/sources/<source>/<key>/`. Path sources run from their declared path; path sources with `prepare` require `writable: true` in v1.
+
 ## Scheduling Flow
 
 When you run:
@@ -89,6 +133,12 @@ A task cache key includes:
 - shell step commands
 - contents of resolved input files
 
+For source tasks, the cache key also includes:
+
+- source name and resolved commit when available
+- candidate fingerprint
+- resolved source `prepare` command strings
+
 Input patterns support common glob shapes such as:
 
 ```txt
@@ -105,6 +155,8 @@ Cache is local only:
 
 To make a task dirty when a file changes, include that file or glob in `inputs`.
 
+Many-repo impact runs get three local cache layers: warm source checkouts in `.async/sources`, dependency/build caches inside those source checkouts, and task results in `.async/cache/tasks`.
+
 ## Execution Records
 
 Each run writes:
@@ -116,6 +168,8 @@ Each run writes:
 ```
 
 `execution.json` is the durable machine-readable record. `summary.md` is the quick human-readable view.
+
+Runs with sources also write source metadata into the execution record, including source path or URL, declared ref, resolved commit when available, checkout directory, and prepare commands.
 
 ## Runners And Adapters
 

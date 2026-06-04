@@ -37,6 +37,32 @@ pnpm async-pipeline graph --format json
 pnpm async-pipeline graph --format dot
 ```
 
+Read pipeline metadata without running anything:
+
+```sh
+pnpm async-pipeline metadata --format json
+pnpm async-pipeline metadata --format json --include-sources
+```
+
+List and sync declared sources:
+
+```sh
+pnpm async-pipeline sources list
+pnpm async-pipeline sources sync
+```
+
+Run a source task:
+
+```sh
+pnpm async-pipeline run-task storefront:test
+```
+
+Generate a GitHub matrix for source tasks in a job:
+
+```sh
+pnpm async-pipeline matrix verifyImpact --format github
+```
+
 Run environment checks:
 
 ```sh
@@ -88,6 +114,16 @@ On the next run, the task can be skipped when:
 - shell commands are the same
 - declared input file contents are the same
 - the previous cached result passed
+
+For source tasks, cache keys also include source context, candidate fingerprint, and resolved `prepare` commands.
+
+Warm source checkouts live under:
+
+```txt
+.async/sources
+```
+
+That lets repeated impact runs reuse git checkouts and dependency/build caches inside the dependent repo.
 
 Clear local state:
 

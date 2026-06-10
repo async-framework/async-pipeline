@@ -14,8 +14,8 @@ Subpaths are available for advanced use:
 
 ```ts
 import { definePipeline } from "@async/pipeline/core";
-import { runJob } from "@async/pipeline/node";
-import { LimaRunnerAdapter } from "@async/pipeline/lima";
+import { hostWorkspace, runJob } from "@async/pipeline/node";
+import { LimaCommandExecutor } from "@async/pipeline/lima";
 import { createRuntime, defineRuntime } from "@async/pipeline/runtime";
 ```
 
@@ -99,20 +99,20 @@ Env values:
 
 Missing secrets, missing vars without defaults, and unmapped variable values fail before the task command runs. Error messages name the env key and source, but do not print secret values.
 
-Generated GitHub Actions uses `github` only for platform config such as deployment environment and permissions. Runtime env still belongs in `env`:
+Generated GitHub Actions uses `environment` and `requires` for portable job metadata. Runtime env still belongs in `env`:
 
 ```ts
 job({
   target: "publish",
+  environment: {
+    name: "npm-publish",
+    url: "https://www.npmjs.com/package/@async/pipeline"
+  },
+  requires: {
+    provenance: true
+  },
   env: {
     NODE_AUTH_TOKEN: env.secret("NPM_TOKEN")
-  },
-  github: {
-    environment: "npm-publish",
-    permissions: {
-      contents: "read",
-      idToken: "write"
-    }
   }
 });
 ```
@@ -132,28 +132,26 @@ steps:
       NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 ```
 
-Local tests can mock the same job without GitHub Actions by setting process env before `runJob(...)`:
+Local tests can mock the same job without GitHub Actions by passing a workspace env into `runJob(...)`:
 
 ```ts
 import assert from "node:assert/strict";
-import { runJob } from "@async/pipeline/node";
+import { hostWorkspace, runJob } from "@async/pipeline/node";
 import pipeline from "../pipeline.js";
 
-const previous = process.env.NPM_TOKEN;
-process.env.NPM_TOKEN = "fake-token";
-
-try {
-  const record = await runJob(pipeline, {
+const record = await runJob(pipeline, {
+  id: "publish",
+  mode: "ci",
+  workspace: hostWorkspace({
     cwd: process.cwd(),
-    jobId: "publish",
-    mode: "ci"
-  });
+    env: {
+      ...process.env,
+      NPM_TOKEN: "fake-token"
+    }
+  })
+});
 
-  assert.equal(record.status, "passed");
-} finally {
-  if (previous === undefined) delete process.env.NPM_TOKEN;
-  else process.env.NPM_TOKEN = previous;
-}
+assert.equal(record.status, "passed");
 ```
 
 To test the already-rendered GitHub shape, set the destination key instead:
@@ -266,7 +264,7 @@ Built-in runner support:
 | `file` | Persistent local task cache under `.async/cache/tasks` by default. |
 | `memory` | Process-local task cache. |
 
-Remote stores can be declared as adapter metadata, but `@async/pipeline` does not ship a Redis dependency.
+Remote stores can be declared as runtime metadata, but `@async/pipeline` does not ship a Redis dependency.
 
 ## source
 
@@ -352,7 +350,13 @@ job({
   description: "Full verification",
   target: "build",
   trigger: ["push"],
-  mode: "ci",
+  environment: {
+    name: "npm-publish",
+    url: "https://www.npmjs.com/package/@async/pipeline"
+  },
+  requires: {
+    provenance: true
+  },
   env: {
     NODE_AUTH_TOKEN: env.secret("NPM_TOKEN"),
     API_URL: env.var("NODE_ENV", {
@@ -361,13 +365,6 @@ job({
     }, {
       default: "dev"
     })
-  },
-  github: {
-    environment: "npm-publish",
-    permissions: {
-      contents: "read",
-      idToken: "write"
-    }
   }
 })
 ```
@@ -378,6 +375,10 @@ Fields:
 | --- | --- |
 | `target` | Task id or task ids used as the job entrypoint. |
 | `trigger` | Trigger ids attached to the job. |
+| `environment` | Optional deployment/environment metadata, either a string name or `{ name, url }`. GitHub lowers this to job `environment`. |
+| `requires` | Optional portable job requirements. `requires.provenance` lowers to GitHub `id-token: write`. |
+| `env` | Job runtime environment. Overrides pipeline env by key. |
+| `github` | GitHub-specific escape hatch for platform fields not covered by portable metadata. |
 | `mode` | Optional `manual` or `ci` mode. |
 | `env` | Runtime environment for this job. Job env overrides pipeline env by key. |
 | `github` | Optional generated GitHub Actions job config for platform environment and permissions. |
@@ -529,6 +530,53 @@ await runtime.stop();
 ```
 
 `compose(...)` is the low-level runtime primitive: functions receive `(ctx, next)`, nested arrays are sequential groups, and `parallel(items)` or `parallel(options, items)` is explicit fan-out. `task(...)` is the opinionated runtime boundary for ids, dependencies, cache directives, inspection, and structured error results.
+
+## runJob
+
+`runJob(...)` executes one job from a normalized pipeline. The job id is `id`; `target` stays inside the job definition and points at the requested task graph endpoint.
+
+```ts
+import { hostWorkspace, runJob } from "@async/pipeline/node";
+import pipeline from "./pipeline.js";
+
+const record = await runJob(pipeline, {
+  id: "verify",
+  workspace: hostWorkspace({
+    cwd: process.cwd(),
+    env: process.env
+  })
+});
+```
+
+If `workspace` is omitted, the runner uses `hostWorkspace({ cwd: process.cwd(), env: process.env })`.
+
+```ts
+interface RunOptions {
+  id: string;
+  mode?: "manual" | "ci";
+  workspace?: PipelineWorkspace;
+}
+
+interface PipelineWorkspace {
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+  fs: PipelineFileSystem;
+  executor: CommandExecutor;
+}
+
+interface CommandExecutor {
+  name: string;
+  runShell(command: string, options: {
+    cwd: string;
+    env: NodeJS.ProcessEnv;
+    task: NormalizedTask;
+    timeoutMs?: number;
+  }): Promise<CommandResult>;
+  checkTool?(tool: string): Promise<boolean>;
+}
+```
+
+The host workspace uses the real filesystem and shell. Tests can provide a custom `env` or `CommandExecutor` to fake secrets, commands, and failures without touching global process state. In-memory and remote workspaces need filesystem-backed store/source ports before they can fully share one fake filesystem with the command executor.
 
 ## Execution Record Shape
 

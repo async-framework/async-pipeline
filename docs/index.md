@@ -262,7 +262,7 @@ export default definePipeline({
 });
 ```
 
-Remote cache stores are adapter definitions for future/runtime use; the node runner executes the built-in `file` and `memory` stores today.
+Remote cache stores are metadata for future runtimes; the node runner executes the built-in `file` and `memory` stores today.
 
 ## Many-Repo Impact Runs
 
@@ -317,7 +317,7 @@ How it works:
 - Parallel task scheduling. Execution is deterministic and sequential today.
 - Built-in Redis or remote task cache execution. Remote stores can be declared, but no Redis dependency is shipped.
 - Automatic dependency discovery. Sources are explicit by design.
-- Automatic CLI routing to Lima. The Lima adapter is available programmatically, and `doctor` checks for `limactl`.
+- Automatic CLI routing to Lima. The Lima command executor is available programmatically, and `doctor` checks for `limactl`.
 - Deno or Ollama runtime integration. They can be declared as optional tool requirements, but they are not package dependencies.
 
 ## Package Shape
@@ -329,7 +329,7 @@ Only `@async/pipeline` is published to npm. The other workspace packages are pri
 | `@async/pipeline` | Public package, `async-pipeline` CLI bin, and bundled dist output. |
 | `@async/pipeline-core` | Private pipeline, runtime, cache, task, job, graph, source, and type contracts. |
 | `@async/pipeline-node` | Private CLI, filesystem store, scheduler, host runner, source sync, and doctor checks. |
-| `@async/pipeline-adapter-lima` | Private programmatic Lima runner adapter using `limactl`. |
+| `@async/pipeline-adapter-lima` | Private programmatic Lima command executor using `limactl`. |
 
 ## More Docs
 

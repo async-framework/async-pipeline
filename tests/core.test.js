@@ -102,6 +102,13 @@ test("normalizes pipeline and job env definitions", () => {
     jobs: {
       verify: job({
         target: "build",
+        environment: {
+          name: "npm-publish",
+          url: "https://www.npmjs.com/package/@async/pipeline"
+        },
+        requires: {
+          provenance: true
+        },
         env: {
           LITERAL: "job",
           NODE_AUTH_TOKEN: env.secret("NPM_TOKEN")
@@ -113,6 +120,11 @@ test("normalizes pipeline and job env definitions", () => {
   assert.equal(pipeline.env.NODE_ENV.kind, "async-pipeline.env.var");
   assert.equal(pipeline.env.API_URL.kind, "async-pipeline.env.var");
   assert.equal(pipeline.env.LITERAL, "root");
+  assert.deepEqual(pipeline.jobs.verify.environment, {
+    name: "npm-publish",
+    url: "https://www.npmjs.com/package/@async/pipeline"
+  });
+  assert.deepEqual(pipeline.jobs.verify.requires, { provenance: true });
   assert.equal(pipeline.jobs.verify.env?.LITERAL, "job");
   assert.equal(pipeline.jobs.verify.env?.NODE_AUTH_TOKEN.kind, "async-pipeline.env.secret");
 });

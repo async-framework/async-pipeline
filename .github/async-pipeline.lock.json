@@ -3,8 +3,8 @@
   "generator": "@async/pipeline",
   "config": "pipeline.ts",
   "workflow": ".github/workflows/async-pipeline.yml",
-  "hash": "sha256:d1843cecdc0ed60e7422401cec6d3eebdbf9add8720e8ce6c715e42a6665038b",
-  "generatedAt": "2026-06-10T22:15:14.401Z",
+  "hash": "sha256:b3c680cb60cede7dba75322d9851e134998f5f5c27ceb7c4c42ac83dafe624b1",
+  "generatedAt": "2026-06-10T23:06:07.962Z",
   "triggers": {
     "pull_request": {},
     "push": {
@@ -30,12 +30,12 @@
           "name": "NPM_TOKEN"
         }
       },
-      "github": {
-        "environment": "npm-publish",
-        "permissions": {
-          "contents": "read",
-          "idToken": "write"
-        }
+      "environment": {
+        "name": "npm-publish",
+        "url": "https://www.npmjs.com/package/@async/pipeline"
+      },
+      "requires": {
+        "provenance": true
       },
       "if": "github.event_name == 'workflow_dispatch'"
     },

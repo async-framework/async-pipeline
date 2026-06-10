@@ -1,8 +1,8 @@
 import { spawn } from "node:child_process";
 import type { NormalizedTask } from "@async/pipeline-core";
-import type { CommandResult, RunnerAdapter } from "@async/pipeline-node";
+import type { CommandExecutor, CommandResult } from "@async/pipeline-node";
 
-export class LimaRunnerAdapter implements RunnerAdapter {
+export class LimaCommandExecutor implements CommandExecutor {
   name = "lima";
 
   constructor(private readonly vm = "async-pipeline") {}

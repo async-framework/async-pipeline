@@ -72,7 +72,7 @@ async function main(): Promise<void> {
       for (const selectedJob of jobs) {
         const graph = tasksForJob(pipeline, selectedJob.id);
         console.log(`Running ${pipeline.name}:${selectedJob.id} (${graph.executionOrder.join(" -> ")})`);
-        const result = await runJob(pipeline, { cwd, jobId: selectedJob.id, mode: "ci" });
+        const result = await runJob(pipeline, { id: selectedJob.id, mode: "ci" });
         console.log(`Pipeline ${result.status}: ${result.id}`);
         if (result.status !== "passed") failed = true;
       }
@@ -185,7 +185,7 @@ async function main(): Promise<void> {
     if (!jobId) throw new Error(`Usage: ${program} run <job>`);
     const graph = tasksForJob(pipeline, jobId);
     console.log(`Running ${pipeline.name}:${jobId} (${graph.executionOrder.join(" -> ")})`);
-    const result = await runJob(pipeline, { cwd, jobId, mode: process.env.CI ? "ci" : "manual" });
+    const result = await runJob(pipeline, { id: jobId, mode: process.env.CI ? "ci" : "manual" });
     console.log(`Pipeline ${result.status}: ${result.id}`);
     process.exitCode = result.status === "passed" ? 0 : 1;
     return;
@@ -194,7 +194,7 @@ async function main(): Promise<void> {
   if (command === "run-task") {
     const taskId = args[0];
     if (!taskId) throw new Error(`Usage: ${program} run-task <task>`);
-    const result = await runSingleTask(pipeline, taskId, { cwd, mode: process.env.CI ? "ci" : "manual" });
+    const result = await runSingleTask(pipeline, taskId, { mode: process.env.CI ? "ci" : "manual" });
     console.log(`Task run ${result.status}: ${result.id}`);
     process.exitCode = result.status === "passed" ? 0 : 1;
     return;

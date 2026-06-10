@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
-import type { EnvValue, GitHubJobConfig, JobId, NormalizedJob, NormalizedPipeline, TriggerDefinition, TriggerId } from "@async/pipeline-core";
+import type { EnvValue, GitHubJobConfig, JobEnvironment, JobRequirements, JobId, NormalizedJob, NormalizedPipeline, TriggerDefinition, TriggerId } from "@async/pipeline-core";
 import { pipelineError } from "@async/pipeline-core";
 
 export const GITHUB_WORKFLOW_PATH = ".github/workflows/async-pipeline.yml";
@@ -24,7 +24,7 @@ export interface GitHubLock {
   hash: string;
   generatedAt: string;
   triggers: Record<string, unknown>;
-  jobs: Array<{ id: string; target: string[]; trigger: string[]; env: Record<string, EnvValue>; github?: GitHubJobConfig; if?: string }>;
+  jobs: Array<{ id: string; target: string[]; trigger: string[]; env: Record<string, EnvValue>; environment?: JobEnvironment; requires?: JobRequirements; github?: GitHubJobConfig; if?: string }>;
   packageManager: string;
   buildCommand?: string;
 }
@@ -167,7 +167,16 @@ function buildRenderModel(
     workflowPath: options.workflowPath,
     triggers: normalizeGitHubTriggers(usedTriggers),
     jobs: Object.values(pipeline.jobs)
-      .map((job) => ({ id: job.id, target: [...job.target], trigger: [...job.trigger], env: { ...pipeline.env, ...(job.env ?? {}) }, github: job.github, if: renderGitHubJobCondition(job, pipeline.triggers) }))
+      .map((job) => ({
+        id: job.id,
+        target: [...job.target],
+        trigger: [...job.trigger],
+        env: { ...pipeline.env, ...(job.env ?? {}) },
+        environment: job.environment,
+        requires: job.requires,
+        github: job.github,
+        if: renderGitHubJobCondition(job, pipeline.triggers)
+      }))
       .sort((left, right) => left.id.localeCompare(right.id)),
     packageManager: options.packageManager,
     buildCommand: options.buildCommand
@@ -230,13 +239,16 @@ function renderJob(lines: string[], model: ReturnType<typeof buildRenderModel>, 
   lines.push(
     "    runs-on: ubuntu-latest"
   );
-  if (job.github?.environment) {
-    lines.push(`    environment: ${JSON.stringify(job.github.environment)}`);
+  const environment = job.environment ?? job.github?.environment;
+  if (environment) {
+    renderGitHubEnvironment(lines, environment);
   }
-  if (job.github?.permissions && Object.keys(job.github.permissions).length > 0) {
+  const idToken = job.github?.permissions?.idToken ?? (job.requires?.provenance ? "write" as const : undefined);
+  const contents = job.github?.permissions?.contents ?? (idToken ? "read" : undefined);
+  if (contents || idToken) {
     lines.push("    permissions:");
-    if (job.github.permissions.contents) lines.push(`      contents: ${job.github.permissions.contents}`);
-    if (job.github.permissions.idToken) lines.push(`      id-token: ${job.github.permissions.idToken}`);
+    if (contents) lines.push(`      contents: ${contents}`);
+    if (idToken) lines.push(`      id-token: ${idToken}`);
   }
   lines.push(
     "    steps:",
@@ -250,7 +262,7 @@ function renderJob(lines: string[], model: ReturnType<typeof buildRenderModel>, 
     "          registry-url: https://registry.npmjs.org/",
     "          package-manager-cache: false",
     "",
-    ...(job.github?.permissions?.idToken === "write"
+    ...(idToken === "write"
       ? [
           "      - name: Use current npm",
           "        run: npm install -g npm@11.16.0",
@@ -289,6 +301,20 @@ function renderJob(lines: string[], model: ReturnType<typeof buildRenderModel>, 
     }
   }
   lines.push("");
+}
+
+function renderGitHubEnvironment(lines: string[], environment: JobEnvironment): void {
+  if (typeof environment === "string") {
+    lines.push(`    environment: ${JSON.stringify(environment)}`);
+    return;
+  }
+  lines.push(
+    "    environment:",
+    `      name: ${JSON.stringify(environment.name)}`
+  );
+  if (environment.url) {
+    lines.push(`      url: ${JSON.stringify(environment.url)}`);
+  }
 }
 
 function renderGitHubEnvValue(value: EnvValue): string | undefined {

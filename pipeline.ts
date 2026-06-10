@@ -72,22 +72,20 @@ export default definePipeline({
   jobs: {
     verify: job({
       target: "pack",
-      trigger: ["pr", "main", "release"],
-      mode: process.env.CI ? "ci" : "manual"
+      trigger: ["pr", "main", "release"]
     }),
     publish: job({
       target: "publish",
       trigger: ["manual"],
-      mode: "ci",
+      environment: {
+        name: "npm-publish",
+        url: "https://www.npmjs.com/package/@async/pipeline"
+      },
+      requires: {
+        provenance: true
+      },
       env: {
         NODE_AUTH_TOKEN: env.secret("NPM_TOKEN")
-      },
-      github: {
-        environment: "npm-publish",
-        permissions: {
-          contents: "read",
-          idToken: "write"
-        }
       }
     })
   }

@@ -19,7 +19,9 @@ jobs:
     name: publish
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    environment: "npm-publish"
+    environment:
+      name: "npm-publish"
+      url: "https://www.npmjs.com/package/@async/pipeline"
     permissions:
       contents: read
       id-token: write

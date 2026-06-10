@@ -122,15 +122,15 @@ export default definePipeline({
     publish: job({
       target: "publish",
       trigger: ["manual"],
+      environment: {
+        name: "npm-publish",
+        url: "https://www.npmjs.com/package/@async/pipeline"
+      },
+      requires: {
+        provenance: true
+      },
       env: {
         NODE_AUTH_TOKEN: env.secret("NPM_TOKEN")
-      },
-      github: {
-        environment: "npm-publish",
-        permissions: {
-          contents: "read",
-          idToken: "write"
-        }
       }
     })
   }
@@ -140,7 +140,9 @@ export default definePipeline({
 The generated GitHub job renders platform config at the job level:
 
 ```yaml
-environment: "npm-publish"
+environment:
+  name: "npm-publish"
+  url: "https://www.npmjs.com/package/@async/pipeline"
 permissions:
   contents: read
   id-token: write
@@ -164,28 +166,26 @@ Missing secrets, missing variables without defaults, and unmapped values fail be
 
 ## Local Env Tests
 
-You do not need GitHub Actions to test env behavior. Set process env in a local test, then call `runJob(...)`.
+You do not need GitHub Actions to test env behavior. Pass a workspace env in a local test, then call `runJob(...)`.
 
 ```ts
 import assert from "node:assert/strict";
-import { runJob } from "@async/pipeline/node";
+import { hostWorkspace, runJob } from "@async/pipeline/node";
 import pipeline from "../pipeline.js";
 
-const previous = process.env.NPM_TOKEN;
-process.env.NPM_TOKEN = "fake-token";
-
-try {
-  const record = await runJob(pipeline, {
+const record = await runJob(pipeline, {
+  id: "publish",
+  mode: "ci",
+  workspace: hostWorkspace({
     cwd: process.cwd(),
-    jobId: "publish",
-    mode: "ci"
-  });
+    env: {
+      ...process.env,
+      NPM_TOKEN: "fake-token"
+    }
+  })
+});
 
-  assert.equal(record.status, "passed");
-} finally {
-  if (previous === undefined) delete process.env.NPM_TOKEN;
-  else process.env.NPM_TOKEN = previous;
-}
+assert.equal(record.status, "passed");
 ```
 
 To test the already-rendered GitHub shape, set the destination key instead:

@@ -13,13 +13,30 @@ export interface CommandResult {
   timedOut?: boolean;
 }
 
-export interface RunnerAdapter {
+export interface CommandExecutor {
   name: string;
   runShell(command: string, options: { cwd: string; env: NodeJS.ProcessEnv; task: NormalizedTask; timeoutMs?: number }): Promise<CommandResult>;
   checkTool?(tool: string): Promise<boolean>;
 }
 
-export class HostRunnerAdapter implements RunnerAdapter {
+export interface PipelineFileSystem {
+  kind: "host";
+}
+
+export interface PipelineWorkspace {
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+  fs: PipelineFileSystem;
+  executor: CommandExecutor;
+}
+
+export interface HostWorkspaceOptions {
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  executor?: CommandExecutor;
+}
+
+export class HostCommandExecutor implements CommandExecutor {
   name = "host";
 
   runShell(command: string, options: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs?: number }): Promise<CommandResult> {
@@ -32,35 +49,45 @@ export class HostRunnerAdapter implements RunnerAdapter {
   }
 }
 
+export function hostWorkspace(options: HostWorkspaceOptions = {}): PipelineWorkspace {
+  return {
+    cwd: options.cwd ?? process.cwd(),
+    env: options.env ?? process.env,
+    fs: { kind: "host" },
+    executor: options.executor ?? new HostCommandExecutor()
+  };
+}
+
 const memoryCacheEntries = new Map<string, TaskResult>();
 
 export interface RunOptions {
-  cwd: string;
-  jobId: string;
+  id: string;
   mode?: "manual" | "ci";
-  adapter?: RunnerAdapter;
+  workspace?: PipelineWorkspace;
 }
 
+export type RunSingleTaskOptions = Omit<RunOptions, "id">;
+
 export async function runJob(pipeline: NormalizedPipeline, options: RunOptions): Promise<ExecutionRecord> {
-  const adapter = options.adapter ?? new HostRunnerAdapter();
-  const store = await createStore(options.cwd);
-  const plan = await createRunPlan(pipeline, options.cwd, store);
-  const graph = tasksForJob(plan.pipeline, options.jobId);
+  const workspace = options.workspace ?? hostWorkspace();
+  const store = await createStore(workspace.cwd);
+  const plan = await createRunPlan(pipeline, workspace.cwd, store);
+  const graph = tasksForJob(plan.pipeline, options.id);
   const record: ExecutionRecord = {
     id: `${new Date().toISOString().replaceAll(/[:.]/g, "-")}-${randomUUID().slice(0, 8)}`,
     pipelineName: plan.pipeline.name,
-    jobId: options.jobId,
-    cwd: options.cwd,
+    jobId: options.id,
+    cwd: workspace.cwd,
     startedAt: new Date().toISOString(),
     status: "running",
-    mode: options.mode ?? "manual",
+    mode: options.mode ?? (workspace.env.CI ? "ci" : "manual"),
     tasks: [],
     sources: Object.fromEntries(Object.entries(plan.sources).map(([sourceId, resolved]) => [sourceId, resolved.record]))
   };
 
   await writeExecution(store, record);
   const preparedSources = new Set<string>();
-  const jobDefinition = plan.pipeline.jobs[options.jobId];
+  const jobDefinition = plan.pipeline.jobs[options.id];
   const envDefinitions = {
     ...plan.pipeline.env,
     ...(jobDefinition?.env ?? {})
@@ -73,10 +100,11 @@ export async function runJob(pipeline: NormalizedPipeline, options: RunOptions):
     const taskSource = taskDefinition.source?.name ? plan.sources[taskDefinition.source.name] : undefined;
     if (taskSource && !preparedSources.has(taskSource.id)) {
       const prepareResult = await runSourcePrepare(taskSource, {
-        adapter,
         candidate: plan.candidate,
-        rootCwd: options.cwd,
+        executor: workspace.executor,
+        rootCwd: workspace.cwd,
         runId: record.id,
+        workspaceEnv: workspace.env,
         store
       });
       preparedSources.add(taskSource.id);
@@ -93,17 +121,19 @@ export async function runJob(pipeline: NormalizedPipeline, options: RunOptions):
     }
 
     const result = await runTask(plan.pipeline, taskDefinition, {
-      adapter,
       candidate: plan.candidate,
-      cwd: taskDefinition.source?.dir || options.cwd,
-      rootCwd: options.cwd,
+      cwd: taskDefinition.source?.dir || workspace.cwd,
+      executor: workspace.executor,
+      rootCwd: workspace.cwd,
       runId: record.id,
       source: taskDefinition.source,
       envDefinitions,
+      workspaceEnv: workspace.env,
       sourcePrepareCommands: taskSource ? await resolvePrepareCommands(taskSource, {
         candidate: plan.candidate,
-        rootCwd: options.cwd,
-        runId: record.id
+        rootCwd: workspace.cwd,
+        runId: record.id,
+        workspaceEnv: workspace.env
       }) : [],
       store
     });
@@ -123,30 +153,31 @@ export async function runJob(pipeline: NormalizedPipeline, options: RunOptions):
   return record;
 }
 
-export async function runSingleTask(pipeline: NormalizedPipeline, taskId: string, options: Omit<RunOptions, "jobId">): Promise<ExecutionRecord> {
+export async function runSingleTask(pipeline: NormalizedPipeline, taskId: string, options: RunSingleTaskOptions = {}): Promise<ExecutionRecord> {
   const syntheticJobId = `task:${taskId}`;
   const syntheticPipeline: NormalizedPipeline = {
     ...pipeline,
     jobs: {
       ...pipeline.jobs,
-      [syntheticJobId]: { id: syntheticJobId, target: [taskId], trigger: [], mode: options.mode }
+      [syntheticJobId]: { id: syntheticJobId, target: [taskId], trigger: [] }
     }
   };
-  return runJob(syntheticPipeline, { ...options, jobId: syntheticJobId });
+  return runJob(syntheticPipeline, { ...options, id: syntheticJobId });
 }
 
 async function runTask(
   pipeline: NormalizedPipeline,
   taskDefinition: NormalizedTask,
   options: {
-    adapter: RunnerAdapter;
     candidate: CandidateContext;
     cwd: string;
+    executor: CommandExecutor;
     rootCwd: string;
     runId: string;
     source?: TaskSourceContext;
     envDefinitions: Record<string, EnvValue>;
     sourcePrepareCommands?: ShellCommand[];
+    workspaceEnv: NodeJS.ProcessEnv;
     store: PipelineStore;
   }
 ): Promise<TaskResult> {
@@ -156,7 +187,7 @@ async function runTask(
   let combinedLog = "";
   let taskEnv: NodeJS.ProcessEnv;
   try {
-    taskEnv = buildTaskEnv(process.env, {
+    taskEnv = buildTaskEnv(options.workspaceEnv, {
       candidate: options.candidate,
       envDefinitions: options.envDefinitions,
       rootCwd: options.rootCwd,
@@ -225,14 +256,14 @@ async function runTask(
     attempts += 1;
     try {
       for (const requirement of taskDefinition.requires?.tools ?? []) {
-        const ok = await options.adapter.checkTool?.(requirement);
+        const ok = await options.executor.checkTool?.(requirement);
         if (ok === false) {
           throw new Error(`Required tool "${requirement}" is not available for task "${taskDefinition.id}".`);
         }
       }
 
       for (const secret of taskDefinition.requires?.secrets ?? []) {
-        if (!process.env[secret]) {
+        if (!taskEnv[secret]) {
           throw new Error(`Required secret "${secret}" is not available for task "${taskDefinition.id}".`);
         }
       }
@@ -301,9 +332,9 @@ async function runTask(
 async function runShellStep(
   step: ShellCommand,
   taskDefinition: NormalizedTask,
-  options: { adapter: RunnerAdapter; cwd: string; env: NodeJS.ProcessEnv }
+  options: { executor: CommandExecutor; cwd: string; env: NodeJS.ProcessEnv }
 ): Promise<CommandResult> {
-  return options.adapter.runShell(step.command, {
+  return options.executor.runShell(step.command, {
     cwd: options.cwd,
     env: options.env,
     task: taskDefinition,
@@ -313,7 +344,7 @@ async function runShellStep(
 
 async function runSourcePrepare(
   source: ResolvedSource,
-  options: { adapter: RunnerAdapter; candidate: CandidateContext; rootCwd: string; runId: string; store: PipelineStore }
+  options: { candidate: CandidateContext; executor: CommandExecutor; rootCwd: string; runId: string; workspaceEnv: NodeJS.ProcessEnv; store: PipelineStore }
 ): Promise<TaskResult | null> {
   if (source.definition.prepare.length === 0) return null;
 
@@ -325,7 +356,7 @@ async function runSourcePrepare(
   const context = createTaskContext({ id: taskId } as NormalizedTask, {
     candidate: options.candidate,
     cwd: source.dir,
-    env: buildTaskEnv(process.env, {
+    env: buildTaskEnv(options.workspaceEnv, {
       candidate: options.candidate,
       rootCwd: options.rootCwd,
       source: sourceTaskContext
@@ -349,9 +380,9 @@ async function runSourcePrepare(
       if (!isShellCommand(step)) {
         throw new Error(`Deferred shell step for source "${source.id}" was not resolved.`);
       }
-      const result = await options.adapter.runShell(step.command, {
+      const result = await options.executor.runShell(step.command, {
         cwd: source.dir,
-        env: buildTaskEnv(process.env, {
+        env: buildTaskEnv(options.workspaceEnv, {
           candidate: options.candidate,
           rootCwd: options.rootCwd,
           source: sourceTaskContext
@@ -394,12 +425,12 @@ async function runSourcePrepare(
 
 async function resolvePrepareCommands(
   source: ResolvedSource,
-  options: { candidate: CandidateContext; rootCwd: string; runId: string }
+  options: { candidate: CandidateContext; rootCwd: string; runId: string; workspaceEnv: NodeJS.ProcessEnv }
 ): Promise<ShellCommand[]> {
   const context = createTaskContext({ id: `${source.id}:prepare` } as NormalizedTask, {
     candidate: options.candidate,
     cwd: source.dir,
-    env: buildTaskEnv(process.env, {
+    env: buildTaskEnv(options.workspaceEnv, {
       candidate: options.candidate,
       rootCwd: options.rootCwd,
       source: sourceContext(source)
@@ -524,7 +555,7 @@ async function readTaskCacheEntry(taskDefinition: NormalizedTask, store: Pipelin
   const storeName = taskDefinition.cache.store ?? "file";
   if (storeName === "file") return readCacheEntry(store, cacheKey);
   if (storeName === "memory") return memoryCacheEntries.get(cacheKey) ?? null;
-  throw new Error(`Cache store "${storeName}" is registered but this runner cannot execute it. Use "file" or "memory", or provide a runtime-specific adapter.`);
+  throw new Error(`Cache store "${storeName}" is registered but this runner cannot execute it. Use "file" or "memory", or provide a runtime-specific executor.`);
 }
 
 async function writeTaskCacheEntry(taskDefinition: NormalizedTask, store: PipelineStore, cacheKey: string, result: TaskResult): Promise<void> {
@@ -537,7 +568,7 @@ async function writeTaskCacheEntry(taskDefinition: NormalizedTask, store: Pipeli
     memoryCacheEntries.set(cacheKey, result);
     return;
   }
-  throw new Error(`Cache store "${storeName}" is registered but this runner cannot execute it. Use "file" or "memory", or provide a runtime-specific adapter.`);
+  throw new Error(`Cache store "${storeName}" is registered but this runner cannot execute it. Use "file" or "memory", or provide a runtime-specific executor.`);
 }
 
 async function runFunctionStep(step: TaskRunFunction, context: TaskContext, timeoutMs?: number): Promise<void> {

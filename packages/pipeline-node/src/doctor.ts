@@ -1,4 +1,4 @@
-import { HostRunnerAdapter } from "./runner.js";
+import { HostCommandExecutor } from "./runner.js";
 
 export interface DoctorCheck {
   name: string;
@@ -7,7 +7,7 @@ export interface DoctorCheck {
 }
 
 export async function runDoctor(): Promise<DoctorCheck[]> {
-  const host = new HostRunnerAdapter();
+  const host = new HostCommandExecutor();
   const checks: DoctorCheck[] = [];
 
   for (const tool of ["node", "pnpm"]) {

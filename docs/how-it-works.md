@@ -118,7 +118,7 @@ Cache refs are normalized during definition:
 task({ cache: "file:cache-first", run: sh`pnpm test` })
 ```
 
-`memory` and `file` are registered by default. Remote stores can be declared for future/runtime adapters without adding mandatory package dependencies.
+`memory` and `file` are registered by default. Remote stores can be declared as metadata for future runtimes without adding mandatory package dependencies.
 
 Many-repo impact runs can also reuse warm git checkouts under:
 
@@ -132,10 +132,10 @@ Many-repo impact runs can also reuse warm git checkouts under:
 | --- | --- |
 | Pipeline | Graph shape, named tasks, jobs, triggers, cache registry, named inputs, sources, and defaults. |
 | Task | Work unit, `dependsOn`, inputs, outputs, cache, retry, timeout, requirements, environment, and steps. |
-| Job | Named entrypoint, trigger binding, target task or tasks, and execution mode. |
+| Job | Named entrypoint, trigger binding, target task or tasks, env, environment metadata, and requirements. |
 | Source | Explicit local or git repo with its own pipeline and optional `prepare` steps. |
 | Scheduler | Graph resolution, deterministic order, cache decisions, retries, timeouts, and fail-fast behavior. |
-| Runner | Actual command execution on the host or a programmatic adapter. |
+| Workspace | Current directory, env, filesystem identity, and command executor. |
 | Store | `.async/cache`, `.async/runs`, logs, summaries, source checkouts, and execution metadata. |
 
 ## Source Composition
@@ -171,20 +171,23 @@ During execution, the runner resolves or fetches the source, loads its pipeline 
 
 Path sources with `prepare` require `writable: true` in v1. Git sources use warm checkouts under `.async/sources`.
 
-## Runners And Adapters
+## Workspaces And Executors
 
-The CLI uses the host runner by default.
+The CLI uses a host workspace by default. A workspace owns the current directory, env, filesystem identity, and command executor used by a run.
 
-The Lima adapter is exported from `@async/pipeline/lima` and can be used programmatically:
+The Lima command executor is exported from `@async/pipeline/lima` and can be used programmatically:
 
 ```ts
-import { LimaRunnerAdapter, runJob } from "@async/pipeline";
+import { LimaCommandExecutor, hostWorkspace, runJob } from "@async/pipeline";
 import pipeline from "./pipeline.js";
 
 await runJob(pipeline, {
-  cwd: process.cwd(),
-  jobId: "verify",
-  adapter: new LimaRunnerAdapter("async-pipeline")
+  id: "verify",
+  workspace: hostWorkspace({
+    cwd: process.cwd(),
+    env: process.env,
+    executor: new LimaCommandExecutor("async-pipeline")
+  })
 });
 ```
 

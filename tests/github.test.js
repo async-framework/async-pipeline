@@ -73,12 +73,12 @@ test("renders github job environment and secret env wiring", async () => {
             NODE_AUTH_TOKEN: env.secret("NPM_TOKEN"),
             PUBLISH_REGISTRY: "https://registry.npmjs.org/"
           },
-          github: {
-            environment: "npm-publish",
-            permissions: {
-              contents: "read",
-              idToken: "write"
-            }
+          environment: {
+            name: "npm-publish",
+            url: "https://www.npmjs.com/package/@async/pipeline"
+          },
+          requires: {
+            provenance: true
           }
         })
       }
@@ -88,13 +88,17 @@ test("renders github job environment and secret env wiring", async () => {
 
     assert.match(rendered.workflow, /publish:/);
     assert.match(rendered.workflow, /if: github\.event_name == 'workflow_dispatch'/);
-    assert.match(rendered.workflow, /environment: "npm-publish"/);
+    assert.match(rendered.workflow, /environment:\n      name: "npm-publish"\n      url: "https:\/\/www\.npmjs\.com\/package\/@async\/pipeline"/);
     assert.match(rendered.workflow, /permissions:\n      contents: read\n      id-token: write/);
     assert.match(rendered.workflow, /NODE_AUTH_TOKEN: \$\{\{ secrets\.NPM_TOKEN \}\}/);
     assert.match(rendered.workflow, /NODE_VERSION: \$\{\{ vars\.NODE_VERSION \}\}/);
     assert.match(rendered.workflow, /PUBLISH_REGISTRY: "https:\/\/registry\.npmjs\.org\/"/);
     assert.match(rendered.workflow, /async-pipeline run publish/);
-    assert.equal(rendered.lock.jobs[0].github.environment, "npm-publish");
+    assert.deepEqual(rendered.lock.jobs[0].environment, {
+      name: "npm-publish",
+      url: "https://www.npmjs.com/package/@async/pipeline"
+    });
+    assert.deepEqual(rendered.lock.jobs[0].requires, { provenance: true });
     assert.equal(rendered.lock.jobs[0].env.NODE_AUTH_TOKEN.kind, "async-pipeline.env.secret");
   } finally {
     rmSync(dir, { force: true, recursive: true });

@@ -106,6 +106,15 @@ export interface PipelineEnvironment {
   image?: string;
 }
 
+export type JobEnvironment = string | {
+  name: string;
+  url?: string;
+};
+
+export interface JobRequirements {
+  provenance?: boolean;
+}
+
 export interface EnvSecretRef {
   kind: "async-pipeline.env.secret";
   name: string;
@@ -250,8 +259,9 @@ export interface JobDefinition {
   description?: string;
   target: TaskId | TaskId[];
   trigger?: TriggerId[];
-  mode?: ExecutionMode;
+  environment?: JobEnvironment;
   env?: Record<string, EnvValue>;
+  requires?: JobRequirements;
   github?: GitHubJobConfig;
 }
 

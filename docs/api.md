@@ -53,6 +53,117 @@ Fields:
 
 Pipeline definitions are metadata. Importing a pipeline, calling `definePipeline`, using directives, or reading metadata does not execute tasks, open cache connections, start cron, clone repos, or evaluate function steps.
 
+## env
+
+`env` is the runtime process environment for a pipeline job. Pipeline-level env is inherited by every job. Job-level env overrides pipeline-level env by key.
+
+```ts
+import { definePipeline, env, job, sh, task } from "@async/pipeline";
+
+export default definePipeline({
+  name: "app",
+  env: {
+    NODE_ENV: env.var("NODE_ENV", { default: "dev" })
+  },
+  tasks: {
+    deploy: task({
+      run: sh`deploy --target "$API_URL"`
+    })
+  },
+  jobs: {
+    deploy: job({
+      target: "deploy",
+      env: {
+        API_URL: env.var("NODE_ENV", {
+          prod: "https://api.example.com",
+          dev: "http://localhost:3000"
+        }, {
+          default: "dev"
+        }),
+        NODE_AUTH_TOKEN: env.secret("NPM_TOKEN")
+      }
+    })
+  }
+});
+```
+
+Env values:
+
+| Value | Runtime behavior |
+| --- | --- |
+| `"literal"` | Uses the literal string. |
+| `env.secret("NAME")` | Reads a secret source. Locally this is `process.env.NAME`; generated GitHub Actions renders `${{ secrets.NAME }}` into the destination env key. |
+| `env.var("NAME")` | Reads a variable source. Locally this is `process.env.NAME`; generated GitHub Actions renders `${{ vars.NAME }}` into the destination env key. |
+| `env.var("NAME", { default: "dev" })` | Reads `NAME`, or uses the default when missing. |
+| `env.var("NAME", { prod, dev }, { default })` | Reads `NAME`, optionally defaults the selector, then maps it to a runtime value. |
+
+Missing secrets, missing vars without defaults, and unmapped variable values fail before the task command runs. Error messages name the env key and source, but do not print secret values.
+
+Generated GitHub Actions uses `github` only for platform config such as deployment environment and permissions. Runtime env still belongs in `env`:
+
+```ts
+job({
+  target: "publish",
+  env: {
+    NODE_AUTH_TOKEN: env.secret("NPM_TOKEN")
+  },
+  github: {
+    environment: "npm-publish",
+    permissions: {
+      contents: "read",
+      idToken: "write"
+    }
+  }
+});
+```
+
+The generated workflow renders:
+
+```yaml
+environment: "npm-publish"
+permissions:
+  contents: read
+  id-token: write
+steps:
+  - name: Run pipeline job
+    run: pnpm async-pipeline run publish
+    env:
+      CI: true
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+```
+
+Local tests can mock the same job without GitHub Actions by setting process env before `runJob(...)`:
+
+```ts
+import assert from "node:assert/strict";
+import { runJob } from "@async/pipeline/node";
+import pipeline from "../pipeline.js";
+
+const previous = process.env.NPM_TOKEN;
+process.env.NPM_TOKEN = "fake-token";
+
+try {
+  const record = await runJob(pipeline, {
+    cwd: process.cwd(),
+    jobId: "publish",
+    mode: "ci"
+  });
+
+  assert.equal(record.status, "passed");
+} finally {
+  if (previous === undefined) delete process.env.NPM_TOKEN;
+  else process.env.NPM_TOKEN = previous;
+}
+```
+
+To test the already-rendered GitHub shape, set the destination key instead:
+
+```ts
+process.env.NODE_AUTH_TOKEN = "fake-token";
+```
+
+For `env: { NODE_AUTH_TOKEN: env.secret("NPM_TOKEN") }`, the runner accepts either the source key (`NPM_TOKEN`) or the rendered destination key (`NODE_AUTH_TOKEN`). This lets tests cover the same runtime step locally and in CI.
+
 The core model is:
 
 ```txt
@@ -271,7 +382,7 @@ Fields:
 | `env` | Runtime environment for this job. Job env overrides pipeline env by key. |
 | `github` | Optional generated GitHub Actions job config for platform environment and permissions. |
 
-`env.secret(name)` reads a platform secret into a runtime env value. `env.var(name)` reads a platform variable. `env.var(name, { default })` uses a default when the variable is missing. `env.var(name, values, { default })` maps a variable value to another value before the task runs. Plain strings remain literal env values.
+See [`env`](#env) for local, GitHub Actions, and test behavior.
 
 ## trigger
 

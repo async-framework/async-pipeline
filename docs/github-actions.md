@@ -54,7 +54,7 @@ The generated workflow is intentionally thin:
 - install dependencies
 - build the CLI when the project dogfoods it from source
 - run `async-pipeline github check`
-- run `async-pipeline github run`
+- run one generated pipeline job with `async-pipeline run <job-id>`
 
 The lock file records the generator version, config path, workflow path, hash, rendered triggers, rendered jobs, package manager, and bootloader options.
 
@@ -83,20 +83,118 @@ Task command changes do not force workflow regeneration unless they affect jobs,
 
 ## Run In GitHub
 
-The generated workflow calls:
+The generated workflow creates one GitHub Actions job per pipeline `job(...)`. Each generated job calls:
 
 ```sh
-async-pipeline github run
+async-pipeline run <job-id>
 ```
 
-`github run` reads GitHub event context from environment variables and the event payload, then runs matching pipeline jobs:
+The generated workflow still uses GitHub event conditions from pipeline triggers:
 
 - `push` and `pull_request` match `trigger.github(...)`.
 - `release` can match `trigger.github({ events: ["release"] })`.
 - `schedule` matches `trigger.cron(...)`.
-- `workflow_dispatch` runs the pipeline jobs manually.
+- `workflow_dispatch` can run manual jobs.
 
 The execution records still go under `.async/runs` inside the runner workspace.
+
+## Runtime Env
+
+Keep platform-specific GitHub settings under `github`, and runtime process env under `env`.
+
+```ts
+import { definePipeline, env, job, sh, task, trigger } from "@async/pipeline";
+
+export default definePipeline({
+  name: "app",
+  env: {
+    NODE_ENV: env.var("NODE_ENV", { default: "dev" })
+  },
+  triggers: {
+    manual: trigger.manual()
+  },
+  tasks: {
+    publish: task({
+      run: sh`npm publish --access public --provenance`
+    })
+  },
+  jobs: {
+    publish: job({
+      target: "publish",
+      trigger: ["manual"],
+      env: {
+        NODE_AUTH_TOKEN: env.secret("NPM_TOKEN")
+      },
+      github: {
+        environment: "npm-publish",
+        permissions: {
+          contents: "read",
+          idToken: "write"
+        }
+      }
+    })
+  }
+});
+```
+
+The generated GitHub job renders platform config at the job level:
+
+```yaml
+environment: "npm-publish"
+permissions:
+  contents: read
+  id-token: write
+```
+
+It renders runtime env on the pipeline step:
+
+```yaml
+- name: Run pipeline job
+  run: pnpm async-pipeline run publish
+  env:
+    CI: true
+    NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+```
+
+`env.secret("NPM_TOKEN")` means "source this value from the platform secret named `NPM_TOKEN`." The runtime destination is the env key you assign it to, such as `NODE_AUTH_TOKEN`.
+
+`env.var("NAME")` maps to `${{ vars.NAME }}` in generated GitHub Actions. `env.var("NODE_ENV", { prod, dev }, { default: "dev" })` is resolved by `async-pipeline run` before the task command runs.
+
+Missing secrets, missing variables without defaults, and unmapped values fail before the task command runs.
+
+## Local Env Tests
+
+You do not need GitHub Actions to test env behavior. Set process env in a local test, then call `runJob(...)`.
+
+```ts
+import assert from "node:assert/strict";
+import { runJob } from "@async/pipeline/node";
+import pipeline from "../pipeline.js";
+
+const previous = process.env.NPM_TOKEN;
+process.env.NPM_TOKEN = "fake-token";
+
+try {
+  const record = await runJob(pipeline, {
+    cwd: process.cwd(),
+    jobId: "publish",
+    mode: "ci"
+  });
+
+  assert.equal(record.status, "passed");
+} finally {
+  if (previous === undefined) delete process.env.NPM_TOKEN;
+  else process.env.NPM_TOKEN = previous;
+}
+```
+
+To test the already-rendered GitHub shape, set the destination key instead:
+
+```ts
+process.env.NODE_AUTH_TOKEN = "fake-token";
+```
+
+For `env: { NODE_AUTH_TOKEN: env.secret("NPM_TOKEN") }`, the runner accepts either `NPM_TOKEN` or `NODE_AUTH_TOKEN`. This lets local tests cover the same step that GitHub runs.
 
 ## Cache
 

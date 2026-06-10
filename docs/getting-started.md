@@ -1,18 +1,17 @@
 # Getting Started
 
-This guide covers two paths:
-
-- running the `async-pipeline` repo itself
-- adding `@async/pipeline` to another project once the package is published
+Use this guide to try the repo, add a pipeline to another project, inspect local runs, and wire the same workflow into CI.
 
 ## Requirements
 
 - pnpm
 - Node 24 for `pipeline.ts`
-- Node 20+ if you use `pipeline.mjs` or `pipeline.js`
-- Optional: Lima installed as `limactl` for future isolated runner work
+- Node 20+ for `pipeline.mjs` or `pipeline.js`
+- Optional: Lima as `limactl` for programmatic isolated-runner experiments
 
-## Run This Repo
+## 1. Try This Repo
+
+From the checkout:
 
 ```sh
 cd /Users/patrickjs/code/async-framework/async-pipeline
@@ -21,26 +20,24 @@ pnpm build
 pnpm async-pipeline run verify
 ```
 
-The `verify` job runs this graph:
+The repo dogfoods its own pipeline in [../pipeline.ts](../pipeline.ts). The `verify` job expands to:
 
 ```txt
 typecheck -> test -> build -> pack
 ```
 
-Useful follow-up commands:
+Run quick inspection commands:
 
 ```sh
 pnpm async-pipeline list
 pnpm async-pipeline graph --format json
-pnpm async-pipeline graph --format dot
 pnpm async-pipeline explain build
-pnpm async-pipeline run-task test
 pnpm async-pipeline doctor
 ```
 
-## Add A Pipeline To A Project
+## 2. Add A Pipeline To A Project
 
-Install the package after it is published:
+After the package is published:
 
 ```sh
 pnpm add -D @async/pipeline
@@ -113,7 +110,43 @@ Run it:
 pnpm async-pipeline run verify
 ```
 
-Short aliases and smart runner dispatch are intentionally out of scope for `@async/pipeline`; use `@async/run` for that layer.
+Use the explicit `async-pipeline` command in docs and CI. Short aliases and smart runner dispatch belong in `@async/run`, not this package.
+
+## 3. Inspect The Run
+
+Runs write machine-readable records and human-readable summaries under `.async/`:
+
+```sh
+ls .async/runs
+cat .async/runs/<run-id>/summary.md
+cat .async/runs/<run-id>/execution.json
+ls .async/runs/<run-id>/logs
+```
+
+The execution record includes task status, attempts, timings, cache keys, cache hit flags, errors, source metadata, and task metadata.
+
+Use metadata commands when you want to inspect a pipeline without running it:
+
+```sh
+pnpm async-pipeline metadata --format json
+pnpm async-pipeline graph --format dot
+```
+
+Metadata reads are safe for planning and automation: they do not clone sources, run `prepare`, execute tasks, or evaluate deferred shell callbacks.
+
+## 4. Wire CI
+
+Keep CI thin. It should install dependencies, build the CLI if needed, and invoke the same job:
+
+```yaml
+- run: pnpm install --frozen-lockfile
+- run: pnpm build
+- run: pnpm async-pipeline run verify
+  env:
+    CI: true
+```
+
+Use pinned GitHub Actions, `permissions: contents: read`, and add write permissions only for publishing, deployment, comments, or privileged artifact uploads.
 
 ## What To Commit
 
@@ -132,7 +165,7 @@ Do not commit:
 
 ## Troubleshooting
 
-If `pipeline` cannot find a config file, make sure one of these exists at the project root:
+If the CLI cannot find a config file, make sure one of these exists at the project root:
 
 ```txt
 pipeline.ts

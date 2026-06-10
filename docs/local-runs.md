@@ -1,24 +1,24 @@
 # Running Locally
 
-Local runs are the primary workflow. GitHub Actions should only invoke the same pipeline you already run on your machine.
+Local runs are the primary workflow. GitHub Actions should invoke the same pipeline command you already use on your machine.
 
-Use `async-pipeline` when you want the command to be explicit. Short aliases and smart runner dispatch belong in `@async/run`.
+Use `async-pipeline` when the command should be explicit. Short aliases and smart runner dispatch belong in `@async/run`.
 
-## Commands
+## Common Commands
 
-List jobs and tasks:
+List jobs, tasks, and sources:
 
 ```sh
 pnpm async-pipeline list
 ```
 
-Run a job:
+Run a job and its dependencies:
 
 ```sh
 pnpm async-pipeline run verify
 ```
 
-Run one task without its dependents:
+Run one task and its dependencies through a synthetic job:
 
 ```sh
 pnpm async-pipeline run-task test
@@ -93,7 +93,8 @@ The execution record includes:
 - cache keys
 - cache hit flags
 - errors
-- metadata
+- source metadata
+- task metadata
 
 ## Cache Behavior
 
@@ -111,11 +112,16 @@ task({
 On the next run, the task can be skipped when:
 
 - the task config is the same
-- shell commands are the same
+- resolved shell commands are the same
 - declared input file contents are the same
+- source context is the same for source tasks
 - the previous cached result passed
 
-For source tasks, cache keys also include source context, candidate fingerprint, and resolved `prepare` commands.
+Task cache lives under:
+
+```txt
+.async/cache/tasks
+```
 
 Warm source checkouts live under:
 
@@ -123,9 +129,7 @@ Warm source checkouts live under:
 .async/sources
 ```
 
-That lets repeated impact runs reuse git checkouts and dependency/build caches inside the dependent repo.
-
-Clear local state:
+When you deliberately want a clean local pipeline state:
 
 ```sh
 rm -rf .async
@@ -185,4 +189,4 @@ pipeline.mjs
 pipeline.js
 ```
 
-Use `pipeline.ts` on Node 24. Use `pipeline.mjs` or `pipeline.js` for Node 20.
+Use `pipeline.ts` on Node 24. Use `pipeline.mjs` or `pipeline.js` for Node 20+.

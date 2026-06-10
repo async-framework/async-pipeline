@@ -1,22 +1,14 @@
 # How It Works
 
-`@async/pipeline` separates definition, scheduling, execution, and storage. The goal is to keep project workflow logic local-first while making the execution backend replaceable.
+`@async/pipeline` keeps workflow logic local-first by separating four jobs:
 
-## Core Objects
+```txt
+define -> resolve graph -> run tasks -> write records/cache
+```
 
-| Object | Owns |
-| --- | --- |
-| Pipeline | Graph shape, named tasks, jobs, triggers, named inputs, and defaults. |
-| Task | Work unit, `dependsOn`, `inputs`, `outputs`, cache, retry, timeout, requirements, environment, and steps. |
-| Source | Explicit local or git repo with its own `pipeline.ts`, optional `prepare` steps, and namespaced task refs. |
-| Job | Named entrypoint, trigger binding, target task or tasks, and execution mode. |
-| Execution | One run, status timeline, task results, timings, logs, metadata, cache hits, and artifacts. |
-| Scheduler | Graph resolution, deterministic task order, cache decisions, retries, timeout handling, and fail-fast behavior. |
-| Runner | Actual command execution on the host, Lima, GitHub runner, or a future backend. |
-| Store | `.async/cache`, `.async/runs`, task logs, summaries, and execution metadata. |
-| Adapter | Backend-specific behavior such as host shell, Lima shell, GitHub runner, Ollama, or future remote runners. |
+The pipeline definition is data. The runner decides what must run, executes it sequentially today, and writes durable local evidence under `.async/`.
 
-## Definition Flow
+## 1. Define
 
 The CLI loads one config file from the project root:
 
@@ -26,7 +18,7 @@ pipeline.mjs
 pipeline.js
 ```
 
-The config must default-export `definePipeline(...)`.
+The config default-exports `definePipeline(...)`:
 
 ```ts
 import { definePipeline, job, sh, task } from "@async/pipeline";
@@ -42,15 +34,86 @@ export default definePipeline({
 });
 ```
 
-`definePipeline` normalizes the graph and validates:
+`definePipeline`, `task`, `job`, `trigger`, `source`, `sh`, and deferred `sh((ctx) => ...)` create metadata only. Importing a pipeline does not clone repos, run commands, or evaluate deferred shell callbacks.
 
-- missing task dependencies
-- missing job targets
-- dependency cycles
-- deterministic task ordering
-- retry and timeout defaults
+## 2. Resolve Graph
 
-Pipeline definitions are metadata. `definePipeline`, `source.git`, `source.path`, `task`, `job`, `sh`, and deferred `sh((ctx) => ...)` create data only. They do not clone repos, run commands, or evaluate deferred shell callbacks.
+Tasks name their dependencies with `dependsOn`:
+
+```ts
+task({
+  dependsOn: ["typecheck"],
+  run: sh`pnpm test`
+})
+```
+
+When you run:
+
+```sh
+async-pipeline run verify
+```
+
+the scheduler:
+
+1. Loads and validates the pipeline.
+2. Expands the job target into the required dependency graph.
+3. Detects missing tasks, missing job targets, and dependency cycles.
+4. Sorts tasks into a deterministic execution order.
+
+Source tasks use namespaced refs such as `storefront:test`. The source map is explicit; `@async/pipeline` does not infer dependents from package manifests, lockfiles, npm metadata, or GitHub search.
+
+## 3. Run Tasks
+
+The Node runner creates a run plan, prepares declared sources when needed, then executes tasks in order.
+
+For each task it:
+
+1. Resolves shell and function steps.
+2. Checks declared tools.
+3. Computes a cache key from task config, declared inputs, resolved commands, and source context.
+4. Replays a passing local cache result when the key matches.
+5. Runs dirty tasks with retry and timeout policy.
+6. Stops on the first failed task.
+
+Execution is sequential in this tranche. Parallel scheduling is planned later.
+
+## 4. Write Records And Cache
+
+Each run writes:
+
+```txt
+.async/runs/<run-id>/execution.json
+.async/runs/<run-id>/summary.md
+.async/runs/<run-id>/logs/<task>.log
+```
+
+`execution.json` is the machine-readable record. `summary.md` is the quick human-readable view. Task logs keep command output for inspection.
+
+Task cache is local:
+
+```txt
+.async/cache/tasks/<cache-key>/result.json
+```
+
+To make a task dirty when a file changes, include that file or glob in `inputs`.
+
+Many-repo impact runs can also reuse warm git checkouts under:
+
+```txt
+.async/sources
+```
+
+## Core Objects
+
+| Object | Owns |
+| --- | --- |
+| Pipeline | Graph shape, named tasks, jobs, triggers, named inputs, sources, and defaults. |
+| Task | Work unit, `dependsOn`, inputs, outputs, cache, retry, timeout, requirements, environment, and steps. |
+| Job | Named entrypoint, trigger binding, target task or tasks, and execution mode. |
+| Source | Explicit local or git repo with its own pipeline and optional `prepare` steps. |
+| Scheduler | Graph resolution, deterministic order, cache decisions, retries, timeouts, and fail-fast behavior. |
+| Runner | Actual command execution on the host or a programmatic adapter. |
+| Store | `.async/cache`, `.async/runs`, logs, summaries, source checkouts, and execution metadata. |
 
 ## Source Composition
 
@@ -81,101 +144,15 @@ export default definePipeline({
 });
 ```
 
-The developer owns this dependency map. `@async/pipeline` does not infer who depends on whom.
+During execution, the runner resolves or fetches the source, loads its pipeline metadata, namespaces its tasks, runs `prepare` in the source checkout, and runs source tasks with `cwd` set to that checkout.
 
-During execution, the Node runner:
-
-1. Resolves or fetches each needed source.
-2. Loads that source's pipeline metadata.
-3. Namespaces source tasks as `<source>:<task>`.
-4. Runs source `prepare` steps inside the source checkout.
-5. Runs source tasks with `cwd` set to that checkout.
-
-Git sources are kept warm under `.async/sources/<source>/<key>/`. Path sources run from their declared path; path sources with `prepare` require `writable: true` in v1.
-
-## Scheduling Flow
-
-When you run:
-
-```sh
-async-pipeline run verify
-```
-
-the scheduler:
-
-1. Loads and validates the pipeline config.
-2. Expands the job target into the full dependency graph.
-3. Computes a deterministic execution order.
-4. Creates `.async/runs/<run-id>/execution.json`.
-5. For each task, computes a cache key.
-6. Replays a cached task result when the local cache has a passing result.
-7. Runs shell or function steps for dirty tasks.
-8. Applies retry and timeout policy.
-9. Writes task logs and updates the execution record.
-10. Stops on first failed task.
-
-Task execution is sequential in this tranche. Parallel scheduling is planned next.
-
-## Cache Keys
-
-A task cache key includes:
-
-- pipeline name
-- task id
-- `dependsOn`
-- declared `inputs`
-- declared `outputs`
-- cache config
-- retry config
-- timeout config
-- requirements
-- environment declaration
-- shell step commands
-- contents of resolved input files
-
-For source tasks, the cache key also includes:
-
-- source name and resolved commit when available
-- candidate fingerprint
-- resolved source `prepare` command strings
-
-Input patterns support common glob shapes such as:
-
-```txt
-src/**/*.ts
-packages/*/package.json
-!src/**/*.test.ts
-```
-
-Cache is local only:
-
-```txt
-.async/cache/tasks/<cache-key>/result.json
-```
-
-To make a task dirty when a file changes, include that file or glob in `inputs`.
-
-Many-repo impact runs get three local cache layers: warm source checkouts in `.async/sources`, dependency/build caches inside those source checkouts, and task results in `.async/cache/tasks`.
-
-## Execution Records
-
-Each run writes:
-
-```txt
-.async/runs/<run-id>/execution.json
-.async/runs/<run-id>/summary.md
-.async/runs/<run-id>/logs/<task>.log
-```
-
-`execution.json` is the durable machine-readable record. `summary.md` is the quick human-readable view.
-
-Runs with sources also write source metadata into the execution record, including source path or URL, declared ref, resolved commit when available, checkout directory, and prepare commands.
+Path sources with `prepare` require `writable: true` in v1. Git sources use warm checkouts under `.async/sources`.
 
 ## Runners And Adapters
 
-The CLI uses the host runner by default. It executes shell steps with the current working directory and environment.
+The CLI uses the host runner by default.
 
-The Lima adapter is exported from `@async/pipeline/lima` and can be used programmatically with `runJob`:
+The Lima adapter is exported from `@async/pipeline/lima` and can be used programmatically:
 
 ```ts
 import { LimaRunnerAdapter, runJob } from "@async/pipeline";

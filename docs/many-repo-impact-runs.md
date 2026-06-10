@@ -1,6 +1,6 @@
 # Many-Repo Impact Runs
 
-Use many-repo impact runs when one repo owns a change and wants to run explicitly declared dependent repos against that candidate.
+Use many-repo impact runs when one repo owns a candidate change and you want to run explicitly declared dependent repos against it.
 
 The dependency map is developer-owned. `@async/pipeline` does not scan package manifests, lockfiles, npm metadata, or GitHub to infer dependents.
 
@@ -39,7 +39,7 @@ export default definePipeline({
 });
 ```
 
-Each source repo must have its own `pipeline.ts`. Root tasks reference source tasks with `<source>:<task>`.
+Each source repo must have its own pipeline file. Root tasks reference source tasks with `<source>:<task>`.
 
 ## Prepare Sources
 
@@ -59,11 +59,25 @@ sh((ctx) => sh`pnpm add @acme/design-system@file:${ctx.candidate.dir}`)
 
 Deferred shell callbacks are not evaluated during metadata reads.
 
+Path sources with `prepare` require `writable: true` in v1. Git sources use warm checkouts under `.async/sources`.
+
 ## Run Locally
+
+List source declarations:
 
 ```sh
 async-pipeline sources list
+```
+
+Sync declared sources:
+
+```sh
 async-pipeline sources sync
+```
+
+Run the impact job:
+
+```sh
 async-pipeline run verifyImpact
 ```
 
@@ -71,12 +85,6 @@ Run one dependent task:
 
 ```sh
 async-pipeline run-task storefront:test
-```
-
-Warm git checkouts are stored in:
-
-```txt
-.async/sources
 ```
 
 Repeated runs can reuse source checkouts, dependency/build caches inside those checkouts, and `.async/cache/tasks`.
@@ -110,4 +118,16 @@ A workflow can use that matrix and run:
 async-pipeline run-task "$TASK"
 ```
 
-This runs dependent repo tests in the current repo's CI. v1 does not dispatch workflows in consumer repos and does not generate workflow files.
+This runs dependent repo tasks in the current repo's CI runner. v1 does not dispatch workflows in consumer repos and does not generate workflow files.
+
+## Why It Stays Explicit
+
+Explicit sources make the review surface clear:
+
+- which repos are being checked
+- which ref each repo starts from
+- which pipeline file is trusted
+- which `prepare` steps mutate a source checkout
+- which namespaced tasks are required before the root job passes
+
+That is less magical than automatic dependency discovery, but it keeps impact checks inspectable and metadata-safe.

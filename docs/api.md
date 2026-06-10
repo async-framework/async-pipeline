@@ -4,6 +4,8 @@ This is the first public API surface for `@async/pipeline`.
 
 ## Imports
 
+Use the public package for normal authoring:
+
 ```ts
 import { definePipeline, job, sh, source, task, trigger } from "@async/pipeline";
 ```
@@ -38,9 +40,11 @@ Fields:
 | `namedInputs` | Reusable input groups referenced by task `inputs`. |
 | `taskDefaults` | Defaults applied by exact task id or task name segment. |
 | `triggers` | Named trigger declarations. |
-| `sources` | Explicit local or git repos whose `pipeline.ts` can be composed into this graph. |
+| `sources` | Explicit local or git repos whose pipeline can be composed into this graph. |
 | `tasks` | Task map. |
 | `jobs` | Job map. |
+
+Pipeline definitions are metadata. Importing a pipeline, calling `definePipeline`, or reading metadata does not execute tasks.
 
 ## task
 
@@ -63,16 +67,18 @@ Fields:
 
 | Field | Purpose |
 | --- | --- |
-| `dependsOn` | Task ids that must run before this task. Use `<source>:<task>` for declared source tasks. |
+| `dependsOn` | Task ids that must run first. Use `<source>:<task>` for declared source tasks. |
 | `inputs` | Files or named input groups that affect cache keys. |
 | `outputs` | Files produced by the task. Included in metadata and cache config. |
 | `cache` | `true`, `false`, or cache options. |
 | `retry` | Number of attempts or `{ attempts, delayMs }`. |
 | `timeout` | Milliseconds or a duration string such as `500ms`, `30s`, `5m`, `1h`. |
 | `requires` | Tool, secret, or runtime declarations. |
-| `environment` | Backend declaration such as host or Lima. |
+| `environment` | Backend declaration such as host or Lima. CLI routing to Lima is not automatic today. |
 | `run` | One shell command or function step. |
 | `steps` | Multiple shell commands or function steps. |
+
+`dependsOn` is the author-facing dependency keyword.
 
 ## source
 
@@ -95,7 +101,7 @@ source.git({
 });
 ```
 
-Sources are explicit. `@async/pipeline` does not infer reverse dependencies from package manifests or lockfiles.
+Sources are explicit. `@async/pipeline` does not infer reverse dependencies from package manifests, lockfiles, npm metadata, or GitHub search.
 
 Use namespaced refs from root tasks:
 
@@ -115,7 +121,7 @@ task({
 })
 ```
 
-`sh` creates a shell step. The host runner executes it with `shell: true` from the task working directory.
+`sh` creates a shell step. The host runner executes it from the task working directory.
 
 Use deferred `sh` only when runtime context is needed:
 
@@ -209,10 +215,11 @@ Task results include status, attempts, cache key, cache hit, timings, error, and
 
 ## Metadata
 
-Pipeline definitions are pure metadata. Importing a `pipeline.ts`, calling `definePipeline`, or running:
+Read metadata without running anything:
 
 ```sh
 async-pipeline metadata --format json
+async-pipeline metadata --format json --include-sources
 ```
 
-does not clone sources, run `prepare`, execute tasks, or evaluate deferred shell callbacks.
+Metadata reads do not clone sources, run source `prepare`, execute tasks, or evaluate deferred shell callbacks. `--include-sources` only loads source pipeline metadata from already-available path sources or previously synced git checkouts.

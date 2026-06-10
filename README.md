@@ -1,40 +1,32 @@
 # @async/pipeline
 
-Local-first TypeScript pipelines for projects that want one task graph to run on a laptop, in GitHub Actions, and eventually on isolated or remote runners.
+Define one local workflow, run it anywhere, and inspect what happened.
 
-`@async/pipeline` is intentionally small: a typed `pipeline.ts`, a task graph, a local run/cache store under `.async/`, and runner adapters for host and Lima execution.
+`@async/pipeline` is a small TypeScript pipeline engine for projects that want their everyday verification flow to be local-first instead of CI-only. Put the task graph in `pipeline.ts`, run it on your laptop with `async-pipeline`, and let GitHub Actions call the same graph with a thin workflow.
 
-## What You Get
+## Why Use It
 
-- Typed pipeline definitions with `definePipeline`, `task`, `job`, `trigger`, `source`, and `sh`.
-- Task fields for `dependsOn`, `inputs`, `outputs`, `cache`, `retry`, `timeout`, `requires`, `environment`, `steps`, and `run`.
-- Explicit many-repo sources with namespaced task refs such as `storefront:test`.
-- Deferred shell commands with `sh((ctx) => sh\`...\`)` for runtime values like the candidate repo path.
-- Local execution records in `.async/runs/<run-id>/`.
-- Local task cache in `.async/cache/tasks/`.
-- CLI commands for running jobs, running one task, listing, graphing, explaining, and doctor checks.
-- Thin GitHub Actions setup that runs the same pipeline used locally.
+- Replace duplicated local scripts and CI-only YAML logic with one typed `pipeline.ts`.
+- Run the same task graph on a laptop and in GitHub Actions.
+- Keep run records, logs, summaries, source checkouts, and task cache under `.async/`.
+- Make cache behavior explicit through declared task inputs and task config.
+- Give people and agents inspectable commands: `list`, `graph`, `explain`, `metadata`, `matrix`, and `doctor`.
+- Run many-repo impact checks with explicit dependent repos and namespaced task refs such as `storefront:test`.
+- Read pipeline metadata without cloning sources, running `prepare`, executing tasks, or evaluating deferred shell callbacks.
+- Keep GitHub Actions pinned, low-permission, and focused on invoking the local pipeline.
 
-## Package Split
+## Quick Start
 
-| Package | Purpose |
-| --- | --- |
-| `@async/pipeline` | Public convenience package and CLI bin. |
-| `@async/pipeline-core` | Pipeline, task, job, graph, and type contracts. |
-| `@async/pipeline-node` | CLI, filesystem store, scheduler, host runner, and doctor checks. |
-| `@async/pipeline-adapter-lima` | Lima runner adapter using `limactl`. |
-
-## Get Started In This Repo
+Try the repo's own pipeline:
 
 ```sh
 cd /Users/patrickjs/code/async-framework/async-pipeline
 pnpm install --frozen-lockfile
 pnpm build
-pnpm async-pipeline list
 pnpm async-pipeline run verify
 ```
 
-Inspect the run that was created:
+Inspect the run:
 
 ```sh
 ls .async/runs
@@ -42,23 +34,17 @@ cat .async/runs/<run-id>/summary.md
 cat .async/runs/<run-id>/execution.json
 ```
 
-Run local health checks:
+The self pipeline lives in [pipeline.ts](pipeline.ts). It runs `typecheck`, `test`, `build`, and `pack` through the `verify` job.
 
-```sh
-pnpm async-pipeline doctor
-```
+## Add A Pipeline
 
-The self pipeline lives in [pipeline.ts](pipeline.ts). It defines `typecheck`, `test`, `build`, `pack`, and the `verify` job.
-
-## Use It In Another Project
-
-After the packages are published, install the public package:
+After the package is published, install the public package:
 
 ```sh
 pnpm add -D @async/pipeline
 ```
 
-Add a `pipeline.ts`:
+Create `pipeline.ts`:
 
 ```ts
 import { definePipeline, job, sh, task } from "@async/pipeline";
@@ -74,12 +60,17 @@ export default definePipeline({
       cache: true,
       run: sh`pnpm typecheck`
     }),
-    build: task({
+    test: task({
       dependsOn: ["typecheck"],
+      inputs: ["source"],
+      cache: true,
+      run: sh`pnpm test`
+    }),
+    build: task({
+      dependsOn: ["test"],
       inputs: ["source"],
       outputs: ["dist/**"],
       cache: true,
-      timeout: "2m",
       run: sh`pnpm build`
     })
   },
@@ -89,7 +80,7 @@ export default definePipeline({
 });
 ```
 
-Add package scripts:
+Add scripts:
 
 ```json
 {
@@ -100,37 +91,33 @@ Add package scripts:
 }
 ```
 
-Then run:
+Run the same graph locally:
 
 ```sh
 pnpm async-pipeline run verify
 ```
 
-Node 24 is the current recommended runtime for `pipeline.ts` because the CLI imports TypeScript config files directly. Node 20+ can use `pipeline.mjs` or `pipeline.js`.
-
-## CLI
-
-Use `async-pipeline` as the explicit command in CI and docs.
+## Useful Commands
 
 ```sh
+async-pipeline list
 async-pipeline run <job>
 async-pipeline run-task <task>
-async-pipeline list
 async-pipeline graph --format json
 async-pipeline graph --format dot
 async-pipeline explain <task>
+async-pipeline metadata --format json
 async-pipeline sources list
 async-pipeline sources sync
-async-pipeline metadata --format json
 async-pipeline matrix <job> --format github
 async-pipeline doctor
 ```
 
-Short aliases and smart runner dispatch belong in `@async/run`, not this package.
+Use `async-pipeline` as the explicit command in docs and CI. Short aliases and smart runner dispatch belong in `@async/run`, not this package.
 
 ## GitHub Actions
 
-The workflow should stay thin: install dependencies, build the CLI, and invoke the same pipeline you run locally.
+GitHub Actions should install dependencies, build the CLI when working from source, and run the same pipeline command used locally.
 
 ```yaml
 permissions:
@@ -156,6 +143,62 @@ jobs:
 
 The checked-in workflow is [.github/workflows/ci.yml](.github/workflows/ci.yml).
 
+## Many-Repo Impact Runs
+
+Declare known dependent repos yourself:
+
+```ts
+import { definePipeline, job, sh, source, task } from "@async/pipeline";
+
+export default definePipeline({
+  name: "design-system",
+  sources: {
+    storefront: source.git({
+      url: "https://github.com/acme/storefront.git",
+      ref: "main",
+      pipeline: "pipeline.ts",
+      prepare: [
+        sh`pnpm install --frozen-lockfile`,
+        sh((ctx) => sh`pnpm add @acme/design-system@file:${ctx.candidate.dir}`)
+      ]
+    })
+  },
+  tasks: {
+    impact: task({ dependsOn: ["storefront:test"] })
+  },
+  jobs: {
+    verifyImpact: job({ target: "impact" })
+  }
+});
+```
+
+`@async/pipeline` does not infer reverse dependencies from package manifests, lockfiles, npm metadata, or GitHub search. The dependency map stays explicit and reviewable.
+
+## Use It When
+
+- You want local verification to be the source of truth.
+- CI should invoke, not redefine, your project workflow.
+- You need typed task dependencies, cache inputs, retries, timeouts, requirements, and run records.
+- You want metadata and graph inspection for humans, tools, and AI agents.
+- You own the list of repos that should be checked against a candidate change.
+
+## Not Yet For
+
+- Parallel task scheduling. Execution is deterministic and sequential today.
+- Shared or remote task cache. Cache is local-first only.
+- Automatic dependency discovery. Sources are explicit by design.
+- Automatic CLI routing to Lima. The Lima adapter is available programmatically, and `doctor` checks for `limactl`.
+- Deno or Ollama runtime integration. They can be declared as optional tool requirements, but they are not package dependencies.
+
+## Package Split
+
+| Package | Purpose |
+| --- | --- |
+| `@async/pipeline` | Public convenience package and `async-pipeline` CLI bin. |
+| `@async/pipeline-core` | Pipeline, task, job, graph, source, and type contracts. |
+| `@async/pipeline-node` | CLI, filesystem store, scheduler, host runner, source sync, and doctor checks. |
+| `@async/pipeline-adapter-lima` | Programmatic Lima runner adapter using `limactl`. |
+
 ## Docs
 
 - [Getting started](docs/getting-started.md)
@@ -164,11 +207,3 @@ The checked-in workflow is [.github/workflows/ci.yml](.github/workflows/ci.yml).
 - [GitHub Actions setup](docs/github-actions.md)
 - [API reference](docs/api.md)
 - [Many-repo impact runs](docs/many-repo-impact-runs.md)
-
-## Current Limits
-
-- Task execution is deterministic and sequential today. Parallel scheduling is part of the next tranche.
-- The CLI uses the host runner by default. The Lima adapter is available programmatically and `doctor` checks for `limactl`.
-- Cache is local-first only. Remote cache and shared cache backends are not implemented yet.
-- Many-repo sources are explicit. `@async/pipeline` does not infer reverse dependencies from package manifests or lockfiles.
-- Deno and Ollama are optional future requirements, not runtime dependencies.

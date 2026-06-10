@@ -1,6 +1,6 @@
 # GitHub Actions Setup
 
-GitHub Actions should be a thin invocation layer. The workflow should install dependencies, build the CLI, and run the same pipeline that runs locally.
+GitHub Actions should be a thin invocation layer. It should install dependencies, build the CLI when needed, and run the same pipeline used locally.
 
 ## Minimal Workflow
 
@@ -41,7 +41,7 @@ jobs:
       - name: Build CLI
         run: pnpm build
 
-      - name: Run TypeScript pipeline
+      - name: Run pipeline
         run: pnpm async-pipeline run verify
         env:
           CI: true
@@ -51,7 +51,7 @@ The repo workflow uses this shape in [../.github/workflows/ci.yml](../.github/wo
 
 ## Why Build Before Running
 
-This repo dogfoods the local CLI from source:
+This repo dogfoods the CLI from source:
 
 ```json
 {
@@ -93,11 +93,11 @@ permissions:
   contents: read
 ```
 
-Add write permissions only when the pipeline actually publishes, comments, deploys, or uploads privileged artifacts.
+Add write permissions only when the pipeline publishes, comments, deploys, or uploads privileged artifacts.
 
 ## Cache
 
-`@async/pipeline` task cache is local to the runner unless you explicitly persist `.async/cache`. Many-repo impact runs also reuse warm source checkouts under `.async/sources` within the runner workspace.
+`@async/pipeline` task cache is local to the runner unless you explicitly persist `.async/cache`. Many-repo impact runs can also reuse warm source checkouts under `.async/sources` within the runner workspace.
 
 If you enable package-manager caching, keep it separate from `@async/pipeline` task caching and verify the package manager is available before the cache integration runs.
 
@@ -145,7 +145,7 @@ jobs:
           CI: true
 ```
 
-This runs dependent repo tasks inside the current repo's CI runner. It does not generate workflow files or dispatch workflows in consumer repos.
+This runs dependent repo tasks in the current repo's CI runner. v1 does not generate workflow files or dispatch workflows in consumer repos.
 
 ## CI Mode
 

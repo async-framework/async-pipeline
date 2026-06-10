@@ -1,6 +1,7 @@
 {
   "name": "@async/pipeline-adapter-lima",
   "version": "0.1.0",
+  "private": true,
   "type": "module",
   "exports": {
     ".": {

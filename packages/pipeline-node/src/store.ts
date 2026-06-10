@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join, relative } from "node:path";
-import type { CandidateContext, ExecutionRecord, NormalizedPipeline, NormalizedTask, TaskResult, TaskSourceContext, TaskStep } from "@async/pipeline-core";
+import type { CandidateContext, ExecutionRecord, NormalizedPipeline, NormalizedTask, TaskCacheOptions, TaskResult, TaskSourceContext, TaskStep } from "@async/pipeline-core";
 import { expandInputs } from "@async/pipeline-core";
 
 export interface PipelineStore {
@@ -74,7 +74,7 @@ export async function computeTaskCacheKey(
     dependsOn: taskDefinition.dependsOn,
     inputs: taskDefinition.inputs,
     outputs: taskDefinition.outputs,
-    cache: taskDefinition.cache,
+    cache: serializeCacheOptions(taskDefinition.cache),
     retry: taskDefinition.retry,
     timeout: taskDefinition.timeout,
     timeoutMs: taskDefinition.timeoutMs,
@@ -233,6 +233,13 @@ function serializeSteps(steps: readonly TaskStep[]): unknown[] {
     if (step.kind === "deferred-shell") return { kind: "deferred-shell" };
     return step;
   });
+}
+
+function serializeCacheOptions(cache: TaskCacheOptions): unknown {
+  return {
+    ...cache,
+    key: typeof cache.key === "function" ? "[function]" : cache.key
+  };
 }
 
 function renderSummary(record: ExecutionRecord): string {

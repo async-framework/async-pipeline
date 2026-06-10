@@ -1,1 +1,1 @@
-export * from "@async/pipeline-adapter-lima";
+export * from "../../pipeline-adapter-lima/dist/index.js";

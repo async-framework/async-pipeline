@@ -1,3 +1,3 @@
-export * from "@async/pipeline-core";
-export * from "@async/pipeline-node";
-export * from "@async/pipeline-adapter-lima";
+export * from "../../pipeline-core/dist/index.js";
+export * from "../../pipeline-node/dist/index.js";
+export * from "../../pipeline-adapter-lima/dist/index.js";

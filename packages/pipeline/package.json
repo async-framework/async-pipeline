@@ -1,7 +1,16 @@
 {
   "name": "@async/pipeline",
   "version": "0.1.0",
+  "description": "Local-first TypeScript pipelines with one task graph for laptops and CI.",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/async-framework/async-pipeline.git"
+  },
+  "bugs": {
+    "url": "https://github.com/async-framework/async-pipeline/issues"
+  },
+  "homepage": "https://github.com/async-framework/async-pipeline#readme",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -18,20 +27,19 @@
     "./lima": {
       "types": "./dist/lima.d.ts",
       "default": "./dist/lima.js"
+    },
+    "./runtime": {
+      "types": "./dist/runtime.d.ts",
+      "default": "./dist/runtime.js"
     }
   },
   "bin": {
     "async-pipeline": "./dist/cli.js"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && chmod +x dist/cli.js",
+    "build": "pnpm --filter @async/pipeline-core build && pnpm --filter @async/pipeline-node build && pnpm --filter @async/pipeline-adapter-lima build && tsc -p tsconfig.build.json && node scripts/bundle-internals.js && chmod +x dist/cli.js",
     "typecheck": "tsc --noEmit -p tsconfig.build.json",
     "pack:check": "npm pack --dry-run"
-  },
-  "dependencies": {
-    "@async/pipeline-adapter-lima": "workspace:*",
-    "@async/pipeline-core": "workspace:*",
-    "@async/pipeline-node": "workspace:*"
   },
   "files": [
     "dist"

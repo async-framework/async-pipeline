@@ -32,6 +32,8 @@ export class HostRunnerAdapter implements RunnerAdapter {
   }
 }
 
+const memoryCacheEntries = new Map<string, TaskResult>();
+
 export interface RunOptions {
   cwd: string;
   jobId: string;
@@ -165,7 +167,7 @@ async function runTask(
   });
 
   if (taskDefinition.cache.enabled) {
-    const cached = await readCacheEntry(options.store, cacheKey);
+    const cached = await readTaskCacheEntry(taskDefinition, options.store, cacheKey);
     if (cached?.status === "passed") {
       const result: TaskResult = {
         ...cached,
@@ -230,7 +232,7 @@ async function runTask(
       };
       await writeTaskLog(options.store, options.runId, taskDefinition.id, combinedLog);
       if (taskDefinition.cache.enabled) {
-        await writeCacheEntry(options.store, cacheKey, result);
+        await writeTaskCacheEntry(taskDefinition, options.store, cacheKey, result);
       }
       return result;
     } catch (error) {
@@ -438,6 +440,26 @@ function buildTaskEnv(
 
 function isShellCommand(step: TaskStep): step is ShellCommand {
   return typeof step !== "function" && step.kind === "shell";
+}
+
+async function readTaskCacheEntry(taskDefinition: NormalizedTask, store: PipelineStore, cacheKey: string): Promise<TaskResult | null> {
+  const storeName = taskDefinition.cache.store ?? "file";
+  if (storeName === "file") return readCacheEntry(store, cacheKey);
+  if (storeName === "memory") return memoryCacheEntries.get(cacheKey) ?? null;
+  throw new Error(`Cache store "${storeName}" is registered but this runner cannot execute it. Use "file" or "memory", or provide a runtime-specific adapter.`);
+}
+
+async function writeTaskCacheEntry(taskDefinition: NormalizedTask, store: PipelineStore, cacheKey: string, result: TaskResult): Promise<void> {
+  const storeName = taskDefinition.cache.store ?? "file";
+  if (storeName === "file") {
+    await writeCacheEntry(store, cacheKey, result);
+    return;
+  }
+  if (storeName === "memory") {
+    memoryCacheEntries.set(cacheKey, result);
+    return;
+  }
+  throw new Error(`Cache store "${storeName}" is registered but this runner cannot execute it. Use "file" or "memory", or provide a runtime-specific adapter.`);
 }
 
 async function runFunctionStep(step: TaskRunFunction, context: TaskContext, timeoutMs?: number): Promise<void> {

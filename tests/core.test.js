@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { buildGraph, composePipelines, definePipeline, job, sh, source, task, tasksForJob } from "../packages/pipeline-core/dist/index.js";
+import { buildGraph, cache, composePipelines, defineCache, definePipeline, dependsOn, fileCache, job, sh, source, task, tasksForJob, trigger } from "../packages/pipeline-core/dist/index.js";
 
 test("orders tasks deterministically with dependencies before dependents", () => {
   const pipeline = definePipeline({
@@ -56,6 +56,98 @@ test("normalizes cache and retry defaults", () => {
 
   assert.equal(pipeline.tasks.build.cache.enabled, true);
   assert.equal(pipeline.tasks.build.retry.attempts, 2);
+  assert.equal(pipeline.tasks.build.cache.store, "file");
+  assert.equal(pipeline.tasks.build.cache.strategy, "cache-first");
+});
+
+test("normalizes cache refs and custom registries", () => {
+  const registry = defineCache({
+    default: "custom:cache-first",
+    stores: {
+      custom: fileCache({ root: ".async/custom-cache" })
+    }
+  });
+  const pipeline = definePipeline({
+    name: "test",
+    cache: registry,
+    tasks: {
+      build: task({ cache: "custom:cache-first", run: sh`echo build` })
+    },
+    jobs: {
+      verify: job({ target: "build" })
+    }
+  });
+
+  assert.equal(pipeline.cache.stores.custom.root, ".async/custom-cache");
+  assert.equal(pipeline.tasks.build.cache.ref, "custom:cache-first");
+  assert.equal(pipeline.tasks.build.cache.store, "custom");
+});
+
+test("rejects unknown cache stores and strategies", () => {
+  assert.throws(() => definePipeline({
+    name: "test",
+    tasks: {
+      build: task({ cache: "redis:cache-first", run: sh`echo build` })
+    },
+    jobs: {
+      verify: job({ target: "build" })
+    }
+  }), (error) => error.code === "ASYNC_PIPELINE_UNKNOWN_CACHE_STORE");
+
+  assert.throws(() => definePipeline({
+    name: "test",
+    tasks: {
+      build: task({ cache: "file:unknown", run: sh`echo build` })
+    },
+    jobs: {
+      verify: job({ target: "build" })
+    }
+  }), (error) => error.code === "ASYNC_PIPELINE_UNKNOWN_CACHE_STRATEGY");
+});
+
+test("lifts run-array cache and dependsOn directives into task metadata", () => {
+  const pipeline = definePipeline({
+    name: "test",
+    tasks: {
+      build: task({ run: sh`echo build` }),
+      deploy: task({}, [
+        dependsOn("build"),
+        cache.use("file:cache-first"),
+        sh`echo deploy`
+      ])
+    },
+    jobs: {
+      verify: job({ target: "deploy" })
+    }
+  });
+
+  assert.deepEqual(pipeline.tasks.deploy.dependsOn, ["build"]);
+  assert.equal(pipeline.tasks.deploy.cache.store, "file");
+  assert.deepEqual(tasksForJob(pipeline, "verify").executionOrder, ["build", "deploy"]);
+});
+
+test("rejects task config run with a second run argument", () => {
+  assert.throws(() => task({ run: sh`echo config` }, sh`echo arg`), (error) => error.code === "ASYNC_PIPELINE_TASK_ARGUMENT_CONFLICT");
+});
+
+test("normalizes cron and filtered github triggers", () => {
+  const pipeline = definePipeline({
+    name: "test",
+    triggers: {
+      main: trigger.github({ events: ["push"], branches: ["main"] }),
+      nightly: trigger.cron("17 2 * * *", { timezone: "UTC" })
+    },
+    tasks: {
+      build: task({ run: sh`echo build` })
+    },
+    jobs: {
+      verify: job({ target: "build", trigger: ["main", "nightly"] })
+    }
+  });
+
+  assert.deepEqual(pipeline.triggers.main.branches, ["main"]);
+  assert.equal(pipeline.triggers.nightly.cron, "17 2 * * *");
+  assert.equal(pipeline.triggers.nightly.timezone, "UTC");
 });
 
 test("normalizes timeout durations", () => {

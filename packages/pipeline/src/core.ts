@@ -1,1 +1,1 @@
-export * from "@async/pipeline-core";
+export * from "../../pipeline-core/dist/index.js";

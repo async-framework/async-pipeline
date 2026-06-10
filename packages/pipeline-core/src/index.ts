@@ -1,3 +1,21 @@
+import {
+  assertCacheStore,
+  defaultPipelineCache,
+  defineCache,
+  isCacheDirective,
+  mergeWithDefaultCacheStores,
+  parseCacheRef,
+  type CacheDirective,
+  type CacheRef,
+  type CacheRegistryDefinition,
+  type CacheRegistryInput,
+  type CacheUseOptions
+} from "./cache.js";
+import { pipelineError } from "./errors.js";
+
+export * from "./cache.js";
+export * from "./errors.js";
+
 export type TaskId = string;
 export type JobId = string;
 export type TriggerId = string;
@@ -67,6 +85,11 @@ export interface CacheDirectory {
 export interface TaskCacheOptions {
   enabled?: boolean;
   directories?: CacheDirectory[];
+  ref?: CacheRef;
+  store?: string;
+  strategy?: "cache-first";
+  ttlMs?: number;
+  key?: unknown;
 }
 
 export interface TaskRequirements {
@@ -85,23 +108,37 @@ export interface TriggerDefinition {
   type: "manual" | "github" | "schedule";
   events?: string[];
   cron?: string;
+  branches?: string[];
+  paths?: string[];
+  tags?: string[];
+  timezone?: string;
 }
+
+export interface DependsOnDirective {
+  kind: "async-pipeline.directive.dependsOn";
+  taskIds: TaskId[];
+}
+
+export type TaskDirective = CacheDirective | DependsOnDirective;
 
 export interface TaskDefinition {
   description?: string;
   dependsOn?: TaskId[];
   inputs?: string[];
   outputs?: string[];
-  cache?: boolean | TaskCacheOptions;
+  cache?: boolean | CacheRef | TaskCacheOptions;
   retry?: number | RetryPolicy;
   timeout?: string | number;
   requires?: TaskRequirements;
   environment?: PipelineEnvironment;
-  run?: TaskStep;
-  steps?: TaskStep[];
+  run?: TaskRunDefinition;
+  steps?: TaskRunItem[];
   continuous?: boolean;
   with?: TaskId[];
 }
+
+export type TaskRunItem = TaskStep | TaskDirective;
+export type TaskRunDefinition = TaskRunItem | readonly TaskRunItem[];
 
 export interface NormalizedTask extends Omit<TaskDefinition, "dependsOn" | "steps" | "run"> {
   id: TaskId;
@@ -161,6 +198,7 @@ export interface NormalizedJob extends Omit<JobDefinition, "target" | "trigger">
 
 export interface PipelineDefinition {
   name: string;
+  cache?: CacheRef | CacheRegistryDefinition | CacheRegistryInput | false;
   namedInputs?: Record<string, string[]>;
   taskDefaults?: Record<string, Partial<TaskDefinition>>;
   triggers?: Record<TriggerId, TriggerDefinition>;
@@ -171,6 +209,7 @@ export interface PipelineDefinition {
 
 export interface NormalizedPipeline {
   name: string;
+  cache: CacheRegistryDefinition;
   namedInputs: Record<string, string[]>;
   triggers: Record<TriggerId, TriggerDefinition>;
   sources: Record<SourceId, NormalizedSource>;
@@ -255,8 +294,13 @@ export function sh(first: TemplateStringsArray | DeferredShellCommandFactory, ..
   return { kind: "shell", command };
 }
 
-export function task(definition: TaskDefinition): TaskDefinition {
-  return definition;
+export function task(definition: TaskDefinition): TaskDefinition;
+export function task(definition: TaskDefinition, run: TaskRunDefinition): TaskDefinition;
+export function task(definition: TaskDefinition, run?: TaskRunDefinition): TaskDefinition {
+  if (definition.run !== undefined && run !== undefined) {
+    throw pipelineError("ASYNC_PIPELINE_TASK_ARGUMENT_CONFLICT", "Do not pass a second task argument when config.run is defined.");
+  }
+  return run === undefined ? definition : { ...definition, run };
 }
 
 export function job(definition: JobDefinition): JobDefinition {
@@ -267,13 +311,26 @@ export const trigger = {
   manual(): TriggerDefinition {
     return { type: "manual" };
   },
-  github(options: { events: string[] }): TriggerDefinition {
-    return { type: "github", events: [...options.events] };
+  github(options: { events: string[]; branches?: string[]; paths?: string[]; tags?: string[] }): TriggerDefinition {
+    return {
+      type: "github",
+      events: [...options.events],
+      branches: options.branches ? [...options.branches] : undefined,
+      paths: options.paths ? [...options.paths] : undefined,
+      tags: options.tags ? [...options.tags] : undefined
+    };
+  },
+  cron(cron: string, options: { timezone?: string } = {}): TriggerDefinition {
+    return { type: "schedule", cron, timezone: options.timezone };
   },
   schedule(cron: string): TriggerDefinition {
     return { type: "schedule", cron };
   }
 };
+
+export function dependsOn(...taskIds: TaskId[]): DependsOnDirective {
+  return { kind: "async-pipeline.directive.dependsOn", taskIds };
+}
 
 export const source = {
   git(definition: Omit<GitSourceDefinition, "type">): GitSourceDefinition {
@@ -294,6 +351,7 @@ export function definePipeline(definition: PipelineDefinition): NormalizedPipeli
 
 export function normalizePipeline(definition: PipelineDefinition): NormalizedPipeline {
   const namedInputs = definition.namedInputs ?? {};
+  const cacheRegistry = normalizeCacheRegistry(definition.cache);
   const sources: Record<SourceId, NormalizedSource> = {};
 
   for (const [id, sourceDefinition] of Object.entries(definition.sources ?? {})) {
@@ -307,15 +365,20 @@ export function normalizePipeline(definition: PipelineDefinition): NormalizedPip
     validateLocalTaskId(id);
     const defaults = definition.taskDefaults?.[id] ?? definition.taskDefaults?.[taskName(id)] ?? {};
     const merged = { ...defaults, ...taskDefinition };
-    const steps = merged.steps ? [...merged.steps] : merged.run ? [merged.run] : [];
-    const cache = normalizeCache(merged.cache);
+    const runItems = merged.steps ? [...merged.steps] : runItemsFromDefinition(merged.run);
+    const { steps, cacheDirectives, dependsOnDirectives } = partitionRunItems(runItems);
+    const liftedDependsOn = uniqueTaskIds([
+      ...(merged.dependsOn ?? []),
+      ...dependsOnDirectives.flatMap((directive) => directive.taskIds)
+    ]);
+    const cache = normalizeCache(merged.cache ?? cacheDirectives[0], cacheRegistry);
     const retry = normalizeRetry(merged.retry);
     const timeoutMs = normalizeTimeout(merged.timeout);
 
     tasks[id] = {
       ...merged,
       id,
-      dependsOn: [...(merged.dependsOn ?? [])],
+      dependsOn: liftedDependsOn,
       inputs: [...(merged.inputs ?? [])],
       outputs: [...(merged.outputs ?? [])],
       steps,
@@ -337,6 +400,7 @@ export function normalizePipeline(definition: PipelineDefinition): NormalizedPip
 
   const pipeline: NormalizedPipeline = {
     name: definition.name,
+    cache: cacheRegistry,
     namedInputs,
     triggers: definition.triggers ?? {},
     sources,
@@ -359,6 +423,13 @@ export function validatePipeline(pipeline: NormalizedPipeline): void {
       if (!pipeline.tasks[companion] && !isKnownExternalTaskRef(pipeline, companion)) {
         throw new Error(`Task "${taskDefinition.id}" references missing companion task "${companion}".`);
       }
+    }
+    if (taskDefinition.cache.enabled && taskDefinition.cache.store) {
+      assertCacheStore(pipeline.cache, {
+        ref: taskDefinition.cache.ref ?? `${taskDefinition.cache.store}:${taskDefinition.cache.strategy ?? "cache-first"}`,
+        store: taskDefinition.cache.store,
+        strategy: taskDefinition.cache.strategy ?? "cache-first"
+      });
     }
   }
 
@@ -608,10 +679,53 @@ function validateSourceId(id: SourceId): void {
   }
 }
 
-function normalizeCache(cache: TaskDefinition["cache"]): TaskCacheOptions {
-  if (cache === true) return { enabled: true, directories: [] };
+function normalizeCacheRegistry(cache: PipelineDefinition["cache"]): CacheRegistryDefinition {
+  if (cache === undefined || cache === false) return defaultPipelineCache();
+  if (typeof cache === "string") {
+    return mergeWithDefaultCacheStores(defineCache({ default: cache }));
+  }
+  if ("kind" in cache && cache.kind === "cache-registry") {
+    return mergeWithDefaultCacheStores(cache);
+  }
+  return mergeWithDefaultCacheStores(defineCache(cache));
+}
+
+function normalizeCache(cache: TaskDefinition["cache"] | CacheDirective, registry: CacheRegistryDefinition): TaskCacheOptions {
+  if (isCacheDirective(cache)) {
+    const parsed = parseCacheRef(cache.ref);
+    assertCacheStore(registry, parsed);
+    return {
+      enabled: true,
+      directories: [],
+      ref: parsed.ref,
+      store: parsed.store,
+      strategy: parsed.strategy,
+      ttlMs: cache.options?.ttlMs,
+      key: cache.options?.key
+    };
+  }
+  if (cache === true) {
+    const parsed = parseCacheRef(registry.default);
+    assertCacheStore(registry, parsed);
+    return { enabled: true, directories: [], ref: parsed.ref, store: parsed.store, strategy: parsed.strategy };
+  }
   if (cache === false || cache === undefined) return { enabled: false, directories: [] };
-  return { enabled: cache.enabled ?? true, directories: [...(cache.directories ?? [])] };
+  if (typeof cache === "string") {
+    const parsed = parseCacheRef(cache);
+    assertCacheStore(registry, parsed);
+    return { enabled: true, directories: [], ref: parsed.ref, store: parsed.store, strategy: parsed.strategy };
+  }
+  const ref = cache.ref ?? (cache.store ? `${cache.store}:${cache.strategy ?? "cache-first"}` : registry.default);
+  const parsed = parseCacheRef(ref);
+  assertCacheStore(registry, parsed);
+  return {
+    ...cache,
+    enabled: cache.enabled ?? true,
+    directories: [...(cache.directories ?? [])],
+    ref: parsed.ref,
+    store: parsed.store,
+    strategy: parsed.strategy
+  };
 }
 
 function normalizeRetry(retry: TaskDefinition["retry"]): RetryPolicy {
@@ -643,4 +757,51 @@ function normalizeTimeout(timeout: TaskDefinition["timeout"]): number | undefine
 function taskName(id: string): string {
   const delimiterIndex = id.lastIndexOf(":");
   return delimiterIndex >= 0 ? id.slice(delimiterIndex + 1) : id;
+}
+
+function runItemsFromDefinition(run: TaskDefinition["run"]): TaskRunItem[] {
+  if (run === undefined) return [];
+  return isTaskRunArray(run) ? [...run] : [run];
+}
+
+function partitionRunItems(items: readonly TaskRunItem[]): {
+  steps: TaskStep[];
+  cacheDirectives: CacheDirective[];
+  dependsOnDirectives: DependsOnDirective[];
+} {
+  const steps: TaskStep[] = [];
+  const cacheDirectives: CacheDirective[] = [];
+  const dependsOnDirectives: DependsOnDirective[] = [];
+
+  for (const item of items) {
+    if (isCacheDirective(item)) {
+      cacheDirectives.push(item);
+      continue;
+    }
+    if (isDependsOnDirective(item)) {
+      dependsOnDirectives.push(item);
+      continue;
+    }
+    steps.push(item);
+  }
+
+  if (cacheDirectives.length > 1) {
+    throw pipelineError("ASYNC_PIPELINE_TASK_CACHE_CONFLICT", "A task can only use one cache directive.");
+  }
+
+  return { steps, cacheDirectives, dependsOnDirectives };
+}
+
+function isDependsOnDirective(value: unknown): value is DependsOnDirective {
+  return Boolean(value)
+    && typeof value === "object"
+    && (value as { kind?: unknown }).kind === "async-pipeline.directive.dependsOn";
+}
+
+function uniqueTaskIds(taskIds: readonly TaskId[]): TaskId[] {
+  return [...new Set(taskIds)];
+}
+
+function isTaskRunArray(value: TaskRunDefinition): value is readonly TaskRunItem[] {
+  return Array.isArray(value);
 }

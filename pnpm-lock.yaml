@@ -15,17 +15,7 @@ importers:
         specifier: 6.0.3
         version: 6.0.3
 
-  packages/pipeline:
-    dependencies:
-      '@async/pipeline-adapter-lima':
-        specifier: workspace:*
-        version: link:../pipeline-adapter-lima
-      '@async/pipeline-core':
-        specifier: workspace:*
-        version: link:../pipeline-core
-      '@async/pipeline-node':
-        specifier: workspace:*
-        version: link:../pipeline-node
+  packages/pipeline: {}
 
   packages/pipeline-adapter-lima:
     dependencies:

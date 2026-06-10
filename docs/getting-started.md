@@ -117,6 +117,16 @@ Add scripts:
 }
 ```
 
+Add local runtime state and scratch output to `.gitignore`:
+
+```gitignore
+.async/
+*.tgz
+.tmp/
+```
+
+Use `.tmp/` only for generated workflow experiments. The real generated GitHub workflow and lock should stay committed.
+
 Run it:
 
 ```sh
@@ -192,6 +202,7 @@ Do not commit:
 
 - `.async/`
 - package tarballs from `npm pack`
+- scratch workflow output from custom `--workflow` / `--lock` paths, such as `.tmp/`
 - `dist/` unless your project already commits build output
 
 ## Troubleshooting

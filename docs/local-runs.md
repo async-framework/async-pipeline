@@ -140,6 +140,16 @@ Warm source checkouts live under:
 .async/sources
 ```
 
+Keep local run state out of git:
+
+```gitignore
+.async/
+*.tgz
+.tmp/
+```
+
+`.async/` contains run records, logs, task cache, source checkouts, and repo-local npm cache used by pack checks. `*.tgz` catches tarballs from pack commands. `.tmp/` is a good place for custom `github generate --workflow ... --lock ...` experiments.
+
 When you deliberately want a clean local pipeline state:
 
 ```sh

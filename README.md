@@ -99,6 +99,21 @@ Add scripts:
 }
 ```
 
+Add local pipeline state to `.gitignore`:
+
+```gitignore
+.async/
+*.tgz
+.tmp/
+```
+
+Keep the generated GitHub workflow and lock committed:
+
+```txt
+.github/workflows/async-pipeline.yml
+.github/async-pipeline.lock.json
+```
+
 Run the same graph locally:
 
 ```sh

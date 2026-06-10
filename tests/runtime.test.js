@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { cache, createRuntime, defineRuntime, task } from "../packages/pipeline/dist/runtime.js";
+import { branch, cache, compose, createRuntime, defineRuntime, parallel, task } from "../packages/pipeline/dist/runtime.js";
 
 test("runtime executes run arrays and nested tasks", async () => {
   const order = [];
@@ -83,4 +83,176 @@ test("runtime nested tasks run once with parent before child", async () => {
 
 test("runtime rejects config run with second argument", () => {
   assert.throws(() => task({ id: "bad", run: async () => {} }, async () => {}), (error) => error.code === "ASYNC_PIPELINE_TASK_ARGUMENT_CONFLICT");
+});
+
+test("runtime compose executes middleware and sequential groups", async () => {
+  const order = [];
+  const runtime = createRuntime(defineRuntime([
+    task({ id: "verify" }, compose(
+      async (_ctx, next) => {
+        order.push("before");
+        const value = await next();
+        order.push(`after:${value}`);
+        return "done";
+      },
+      [
+        async (_ctx, next) => {
+          order.push("group-a");
+          return next();
+        },
+        async (_ctx, next) => {
+          order.push("group-b");
+          return next();
+        }
+      ],
+      async () => {
+        order.push("final");
+        return "value";
+      }
+    ))
+  ]));
+
+  const result = await runtime.run({});
+
+  assert.equal(result.status, "passed");
+  assert.equal(result.output, "done");
+  assert.deepEqual(order, ["before", "group-a", "group-b", "final", "after:value"]);
+  assert.equal(runtime.inspect().tasks[0].flow.children[1].kind, "series");
+});
+
+test("runtime task accepts array flows with explicit parallel fan-out", async () => {
+  const order = [];
+  const runtime = createRuntime(defineRuntime([
+    task({ id: "verify" }, [
+      async (_ctx, next) => {
+        order.push("start");
+        return next();
+      },
+      parallel([
+        async () => {
+          order.push("typecheck");
+          return "typecheck";
+        },
+        async () => {
+          order.push("test");
+          return "test";
+        }
+      ], { concurrency: 2 }),
+      async (ctx) => {
+        order.push(`after:${ctx.output.join(",")}`);
+        return "done";
+      }
+    ])
+  ]));
+
+  const result = await runtime.run({});
+
+  assert.equal(result.status, "passed");
+  assert.equal(result.output, "done");
+  assert.deepEqual(order, ["start", "typecheck", "test", "after:typecheck,test"]);
+  assert.equal(result.nodes.some((node) => node.kind === "parallel" && node.status === "passed"), true);
+});
+
+test("runtime branch executes only the selected flow", async () => {
+  const order = [];
+  const runtime = createRuntime(defineRuntime([
+    task({ id: "publish" }, [
+      branch(
+        (ctx) => Boolean(ctx.input.preview),
+        async () => {
+          order.push("preview");
+          return "preview";
+        },
+        async () => {
+          order.push("release");
+          return "release";
+        }
+      )
+    ])
+  ]));
+
+  const result = await runtime.run({ preview: true });
+
+  assert.equal(result.status, "passed");
+  assert.equal(result.output, "preview");
+  assert.deepEqual(order, ["preview"]);
+  assert.equal(result.nodes.some((node) => node.kind === "branch" && node.status === "passed"), true);
+});
+
+test("runtime exposes branch predicate failures separately", async () => {
+  const runtime = createRuntime(defineRuntime([
+    task({ id: "publish" }, [
+      branch(
+        () => {
+          throw new Error("cannot choose branch");
+        },
+        async () => "preview"
+      )
+    ])
+  ]));
+
+  const result = await runtime.run({});
+
+  assert.equal(result.status, "failed");
+  assert.equal(result.nodes.some((node) => node.kind === "branch" && node.errorCode === "ASYNC_PIPELINE_RUNTIME_BRANCH_PREDICATE_FAILED"), true);
+});
+
+test("runtime exposes structural failure nodes", async () => {
+  const runtime = createRuntime(defineRuntime([
+    task({ id: "verify" }, [
+      async (_ctx, next) => next(),
+      parallel([
+        async () => "ok",
+        async () => {
+          throw new Error("boom");
+        }
+      ])
+    ])
+  ]));
+
+  const result = await runtime.run({});
+
+  assert.equal(result.status, "failed");
+  assert.equal(result.tasks[0].status, "failed");
+  assert.equal(result.tasks[0].errorCode, "ASYNC_PIPELINE_RUNTIME_TASK_FAILED");
+  assert.equal(result.nodes.some((node) => node.kind === "parallel" && node.status === "failed"), true);
+  assert.equal(result.nodes.some((node) => node.kind === "middleware" && node.status === "failed" && node.path.at(-1) === "0"), true);
+});
+
+test("runtime exposes double next guardrail in failed nodes", async () => {
+  const runtime = createRuntime(defineRuntime([
+    task({ id: "bad" }, [
+      async (_ctx, next) => {
+        await next();
+        return next();
+      },
+      async () => "done"
+    ])
+  ]));
+
+  const result = await runtime.run({});
+
+  assert.equal(result.status, "failed");
+  assert.equal(result.nodes.some((node) => node.errorCode === "ASYNC_PIPELINE_RUNTIME_NEXT_CALLED_TWICE"), true);
+});
+
+test("runtime can define a top-level anonymous composed flow", async () => {
+  const order = [];
+  const runtime = createRuntime(defineRuntime([
+    async (_ctx, next) => {
+      order.push("top");
+      return next();
+    },
+    async () => {
+      order.push("done");
+      return "ok";
+    }
+  ]));
+
+  const result = await runtime.run({});
+
+  assert.equal(result.status, "passed");
+  assert.equal(result.output, "ok");
+  assert.deepEqual(order, ["top", "done"]);
+  assert.deepEqual(result.tasks.map((entry) => entry.id), ["runtime"]);
 });

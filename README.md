@@ -362,18 +362,27 @@ Only `@async/pipeline` is published to npm. The other workspace packages are pri
 The MVP remains `pipeline.ts`, local runs, and generated GitHub Actions. The package also exposes additive runtime primitives under `@async/pipeline/runtime` for embeddable workflows:
 
 ```ts
-import { cache, createRuntime, defineRuntime, task } from "@async/pipeline/runtime";
+import { compose, createRuntime, defineRuntime, parallel, task } from "@async/pipeline/runtime";
 
 const work = defineRuntime([
-  task({ id: "sync" }, [
-    cache.use("memory:cache-first"),
+  task({ id: "verify" }, compose(
     async (ctx, next) => {
-      ctx.state.synced = true;
+      ctx.state.started = true;
       return next();
-    }
-  ])
+    },
+    [
+      async (_ctx, next) => next(),
+      async (_ctx, next) => next()
+    ],
+    parallel([
+      async () => "typecheck",
+      async () => "test"
+    ])
+  ))
 ]);
 
 const runtime = createRuntime(work);
 await runtime.run();
 ```
+
+`compose(...)` is public for reusable runtime flows. `task(...)` remains the opinionated boundary for ids, dependencies, cache, inspection, and structured failures.

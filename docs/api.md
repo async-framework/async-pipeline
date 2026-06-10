@@ -358,10 +358,29 @@ async-pipeline github run
 The runtime API is additive and advanced. It is for embeddable workflows, not the primary `pipeline.ts` MVP path:
 
 ```ts
-import { cache, createRuntime, defineRuntime, task } from "@async/pipeline/runtime";
+import { branch, cache, compose, createRuntime, defineRuntime, parallel, task } from "@async/pipeline/runtime";
 
 const work = defineRuntime([
-  task({ id: "sync" }, [
+  task({ id: "verify" }, compose(
+    async (ctx, next) => {
+      ctx.state.started = true;
+      return next();
+    },
+    [
+      async (_ctx, next) => next(),
+      async (_ctx, next) => next()
+    ],
+    parallel([
+      async () => "typecheck",
+      async () => "test"
+    ]),
+    branch(
+      (ctx) => Boolean(ctx.input),
+      async () => "with-input",
+      async () => "without-input"
+    )
+  )),
+  task({ id: "sync", dependsOn: ["verify"] }, [
     cache.use("memory:cache-first"),
     async (ctx, next) => {
       ctx.state.synced = true;
@@ -371,10 +390,12 @@ const work = defineRuntime([
 ]);
 
 const runtime = createRuntime(work);
-await runtime.run();
+const result = await runtime.run();
 await runtime.start();
 await runtime.stop();
 ```
+
+`compose(...)` is the low-level runtime primitive: functions receive `(ctx, next)`, nested arrays are sequential groups, and `parallel(...)` is explicit fan-out. `task(...)` is the opinionated runtime boundary for ids, dependencies, cache directives, inspection, and structured error results.
 
 ## Execution Record Shape
 

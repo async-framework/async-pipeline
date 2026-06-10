@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.1 - 2026-06-10
+
+### Features
+
+- Add Throwback-style runtime composition with public `compose(...)`, sequential array groups, explicit `parallel(...)`, and `branch(...)`.
+
+### API Changes
+
+- Export `compose`, `series`, `parallel`, and `branch` from `@async/pipeline/runtime`.
+- Add structured runtime task and node failure reporting for task, series, parallel, branch, cache, and middleware boundaries.
+
 ## 0.1.0 - 2026-06-10
 
 First public release candidate for `@async/pipeline`.

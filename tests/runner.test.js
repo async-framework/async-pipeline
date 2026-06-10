@@ -48,7 +48,7 @@ test("job env secrets fail before execution when missing", async () => {
         publish: job({
           target: "publish",
           env: {
-            NODE_AUTH_TOKEN: env.secret("ASYNC_PIPELINE_TEST_SECRET")
+            ASYNC_PIPELINE_TEST_SECRET_DESTINATION: env.secret("ASYNC_PIPELINE_TEST_SECRET")
           }
         })
       }
@@ -61,7 +61,7 @@ test("job env secrets fail before execution when missing", async () => {
 
       assert.equal(record.status, "failed");
       assert.equal(record.tasks[0]?.status, "failed");
-      assert.match(record.tasks[0]?.error ?? "", /Required secret "ASYNC_PIPELINE_TEST_SECRET" for env "NODE_AUTH_TOKEN"/);
+      assert.match(record.tasks[0]?.error ?? "", /Required secret "ASYNC_PIPELINE_TEST_SECRET" for env "ASYNC_PIPELINE_TEST_SECRET_DESTINATION"/);
       assert.doesNotMatch(record.tasks[0]?.error ?? "", /exit code 2/);
     } finally {
       if (previous === undefined) delete process.env.ASYNC_PIPELINE_TEST_SECRET;

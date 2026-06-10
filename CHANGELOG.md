@@ -11,8 +11,11 @@ First public release candidate for `@async/pipeline`.
 - Add task run-array composition with static directives such as `cache.use(...)` and `dependsOn(...)`.
 - Add `@async/pipeline/runtime` with `defineRuntime`, `createRuntime`, runtime `task`, cache directives, dependency ordering, and start/stop hooks.
 - Generate a thin GitHub Actions bootloader from `pipeline.ts` with committed workflow and lock files.
+- Add unified `sync` config for generated GitHub Actions files and package-manager task commands.
 - Add `async-pipeline github generate`, `async-pipeline github check`, and `async-pipeline github run`.
+- Add `async-pipeline sync list`, `sync generate`, `sync check`, `sync github ...`, and `sync tasks ...`.
 - Support custom GitHub workflow and lock output paths for tests and local experiments.
+- Sync package `scripts` and Deno `tasks` from pipeline jobs, with opt-in raw task commands under `pipeline:task:<id>`.
 - Dogfood the generated GitHub workflow for pull requests, pushes to `main`, manual dispatch, and GitHub release events.
 - Rewrite the README and docs around the MVP flow: define one `pipeline.ts`, run it locally, inspect it, generate GitHub Actions, and keep runtime primitives advanced.
 
@@ -22,6 +25,7 @@ First public release candidate for `@async/pipeline`.
 - Add pipeline-level `cache` config and task-level cache refs.
 - Add `trigger.cron(...)`; keep `trigger.schedule(...)` as a compatibility alias.
 - Extend `trigger.github(...)` with `branches`, `paths`, and `tags`.
+- Add top-level `sync.github` and `sync.tasks` pipeline config.
 - Add the `dependsOn(...)` directive while keeping task `dependsOn` as the canonical graph field.
 - Add `task(config, run)` and `task(config, [runOrDirective, ...])` overloads.
 - Throw `ASYNC_PIPELINE_TASK_ARGUMENT_CONFLICT` when `config.run` is combined with a second task argument.
@@ -31,5 +35,6 @@ First public release candidate for `@async/pipeline`.
 
 - Replace the hand-written CI workflow with generated `.github/workflows/async-pipeline.yml`.
 - Add `.github/async-pipeline.lock.json` so CI can fail when generated GitHub Actions files are stale.
+- Add `.async-pipeline/tasks.lock.json` so package-manager task sync can detect stale files and avoid overwriting unmanaged commands.
 - Keep the generated GitHub workflow pinned to full action SHAs with tag comments and `contents: read` permissions.
-- Keep `.async/` as local runtime state; GitHub generation state lives under `.github/`.
+- Keep `.async/` as local runtime state; GitHub generation state lives under `.github/` and task sync state lives under `.async-pipeline/`.

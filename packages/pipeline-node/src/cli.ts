@@ -8,6 +8,7 @@ import { loadPipeline } from "./loader.js";
 import { runJob, runSingleTask } from "./runner.js";
 import { createStore } from "./store.js";
 import { matrixForJob, readPipelineMetadata, resolveSources, sourceContext } from "./sources.js";
+import { checkTaskSync, describeTaskSync, renderTaskSync, writeTaskSync } from "./sync.js";
 
 async function main(): Promise<void> {
   const [command, ...args] = process.argv.slice(2);
@@ -34,6 +35,11 @@ async function main(): Promise<void> {
   }
 
   const pipeline = await loadPipeline(configPath);
+
+  if (command === "sync") {
+    await handleSyncCommand(args, { cwd, configPath, pipeline });
+    return;
+  }
 
   if (command === "github") {
     const subcommand = args[0] ?? "help";
@@ -208,10 +214,160 @@ function printHelp(program: string): void {
   ${program} sources sync
   ${program} metadata --format json [--include-sources]
   ${program} matrix <job> --format github
+  ${program} sync list
+  ${program} sync generate
+  ${program} sync check
+  ${program} sync github list
+  ${program} sync github generate [--workflow <path>] [--lock <path>]
+  ${program} sync github check [--workflow <path>] [--lock <path>]
+  ${program} sync tasks list
+  ${program} sync tasks generate
+  ${program} sync tasks check
   ${program} github generate [--workflow <path>] [--lock <path>]
   ${program} github check [--workflow <path>] [--lock <path>]
   ${program} github run
   ${program} doctor`);
+}
+
+async function handleSyncCommand(
+  args: string[],
+  context: { cwd: string; configPath: string; pipeline: Awaited<ReturnType<typeof loadPipeline>> }
+): Promise<void> {
+  const targetNames = new Set(["github", "tasks"]);
+  const maybeTarget = args[0];
+  const target = targetNames.has(maybeTarget ?? "") ? maybeTarget : undefined;
+  const subcommand = target ? args[1] ?? "list" : args[0] ?? "list";
+  const rest = target ? args.slice(2) : args.slice(1);
+
+  if (target === "github") {
+    await handleSyncGitHubCommand(subcommand, rest, context, { requireConfigured: true });
+    return;
+  }
+  if (target === "tasks") {
+    await handleSyncTasksCommand(subcommand, context, { requireConfigured: true });
+    return;
+  }
+
+  if (subcommand === "list") {
+    let listed = false;
+    if (context.pipeline.sync.github.enabled) {
+      console.log(`GitHub workflow: ${context.pipeline.sync.github.workflow}`);
+      console.log(`GitHub lock: ${context.pipeline.sync.github.lock}`);
+      listed = true;
+    }
+    if (context.pipeline.sync.tasks.enabled) {
+      for (const line of describeTaskSync(await renderTaskSync(context.pipeline, context))) console.log(line);
+      listed = true;
+    }
+    if (!listed) console.log("No sync targets configured.");
+    return;
+  }
+
+  if (subcommand === "generate") {
+    let generated = false;
+    if (context.pipeline.sync.github.enabled) {
+      await handleSyncGitHubCommand("generate", rest, context, { requireConfigured: false });
+      generated = true;
+    }
+    if (context.pipeline.sync.tasks.enabled) {
+      await handleSyncTasksCommand("generate", context, { requireConfigured: false });
+      generated = true;
+    }
+    if (!generated) throw new Error("No sync targets configured.");
+    return;
+  }
+
+  if (subcommand === "check") {
+    const issues: string[] = [];
+    let checked = false;
+    if (context.pipeline.sync.github.enabled) {
+      const paths = githubGenerationPaths(rest);
+      const rendered = await renderGitHubWorkflow(context.pipeline, { ...context, ...paths });
+      issues.push(...await checkGitHubWorkflow(rendered, context.cwd));
+      checked = true;
+    }
+    if (context.pipeline.sync.tasks.enabled) {
+      const rendered = await renderTaskSync(context.pipeline, context);
+      issues.push(...await checkTaskSync(rendered, context.cwd));
+      checked = true;
+    }
+    if (!checked) throw new Error("No sync targets configured.");
+    if (issues.length > 0) {
+      for (const issue of issues) console.error(issue);
+      process.exitCode = 1;
+      return;
+    }
+    console.log("Sync targets are current.");
+    return;
+  }
+
+  throw new Error(`Unknown sync command "${subcommand}".`);
+}
+
+async function handleSyncGitHubCommand(
+  subcommand: string,
+  args: string[],
+  context: { cwd: string; configPath: string; pipeline: Awaited<ReturnType<typeof loadPipeline>> },
+  options: { requireConfigured: boolean }
+): Promise<void> {
+  if (options.requireConfigured && !context.pipeline.sync.github.enabled) {
+    throw new Error("GitHub sync is not configured. Add sync.github to pipeline.ts.");
+  }
+  const paths = githubGenerationPaths(args);
+  const rendered = await renderGitHubWorkflow(context.pipeline, { ...context, ...paths });
+  if (subcommand === "list") {
+    console.log(`GitHub workflow: ${rendered.workflowPath}`);
+    console.log(`GitHub lock: ${rendered.lockPath}`);
+    return;
+  }
+  if (subcommand === "generate") {
+    await writeGitHubWorkflow(rendered, context.cwd);
+    console.log(`Generated ${rendered.workflowPath}`);
+    console.log(`Generated ${rendered.lockPath}`);
+    return;
+  }
+  if (subcommand === "check") {
+    const issues = await checkGitHubWorkflow(rendered, context.cwd);
+    if (issues.length > 0) {
+      for (const issue of issues) console.error(issue);
+      process.exitCode = 1;
+      return;
+    }
+    console.log("GitHub workflow is current.");
+    return;
+  }
+  throw new Error(`Unknown sync github command "${subcommand}".`);
+}
+
+async function handleSyncTasksCommand(
+  subcommand: string,
+  context: { cwd: string; configPath: string; pipeline: Awaited<ReturnType<typeof loadPipeline>> },
+  options: { requireConfigured: boolean }
+): Promise<void> {
+  const rendered = await renderTaskSync(context.pipeline, context);
+  if (subcommand === "list") {
+    for (const line of describeTaskSync(rendered)) console.log(line);
+    if (options.requireConfigured && !rendered.enabled) process.exitCode = 1;
+    return;
+  }
+  if (subcommand === "generate") {
+    if (options.requireConfigured && !rendered.enabled) throw new Error("Task sync is not configured. Add sync.tasks to pipeline.ts.");
+    await writeTaskSync(rendered, context.cwd);
+    for (const manifest of rendered.manifests) console.log(`Generated ${manifest.path}`);
+    console.log(`Generated ${rendered.lockPath}`);
+    return;
+  }
+  if (subcommand === "check") {
+    const issues = await checkTaskSync(rendered, context.cwd, { requireConfigured: options.requireConfigured });
+    if (issues.length > 0) {
+      for (const issue of issues) console.error(issue);
+      process.exitCode = 1;
+      return;
+    }
+    console.log("Task sync is current.");
+    return;
+  }
+  throw new Error(`Unknown sync tasks command "${subcommand}".`);
 }
 
 function findPipelineConfig(cwd: string): string | null {

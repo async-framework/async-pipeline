@@ -58,6 +58,10 @@ export default definePipeline({
     main: trigger.github({ events: ["push"], branches: ["main"] }),
     nightly: trigger.cron("17 2 * * *")
   },
+  sync: {
+    github: true,
+    tasks: true
+  },
   namedInputs: {
     source: ["src/**/*.ts", "package.json", "pnpm-lock.yaml", "tsconfig.json"]
   },
@@ -88,7 +92,18 @@ export default definePipeline({
 });
 ```
 
-Add scripts:
+The mental model is deliberately small:
+
+```txt
+tasks     = what can run
+jobs      = named entrypoints
+triggers  = when jobs should run
+sync      = generated files to keep current
+```
+
+Triggers describe when jobs should run. Sync describes which generated files should be kept current.
+
+Add scripts manually, or let task sync write package-manager commands for selected jobs:
 
 ```json
 {
@@ -112,6 +127,7 @@ Keep the generated GitHub workflow and lock committed:
 ```txt
 .github/workflows/async-pipeline.yml
 .github/async-pipeline.lock.json
+.async-pipeline/tasks.lock.json
 ```
 
 Run the same graph locally:
@@ -133,6 +149,15 @@ async-pipeline metadata --format json
 async-pipeline sources list
 async-pipeline sources sync
 async-pipeline matrix <job> --format github
+async-pipeline sync list
+async-pipeline sync generate
+async-pipeline sync check
+async-pipeline sync github list
+async-pipeline sync github generate [--workflow <path>] [--lock <path>]
+async-pipeline sync github check [--workflow <path>] [--lock <path>]
+async-pipeline sync tasks list
+async-pipeline sync tasks generate
+async-pipeline sync tasks check
 async-pipeline github generate [--workflow <path>] [--lock <path>]
 async-pipeline github check [--workflow <path>] [--lock <path>]
 async-pipeline github run
@@ -147,6 +172,8 @@ GitHub Actions requires committed YAML for `push`, `pull_request`, `schedule`, `
 
 ```sh
 async-pipeline github generate
+# or
+async-pipeline sync github generate
 ```
 
 That writes:
@@ -171,6 +198,49 @@ async-pipeline github run
 ```
 
 The checked-in generated workflow is [.github/workflows/async-pipeline.yml](.github/workflows/async-pipeline.yml).
+
+## Package Task Sync
+
+`sync.tasks: true` syncs all pipeline jobs into the root package-manager manifest. It writes package `scripts` in `package.json` and Deno `tasks` in `deno.json` or `deno.jsonc`:
+
+```json
+{
+  "scripts": {
+    "pipeline:verify": "async-pipeline run verify"
+  }
+}
+```
+
+Raw task commands are opt-in and namespaced:
+
+```ts
+sync: {
+  tasks: {
+    prefix: "pipeline",
+    runners: ["package"],
+    targets: [{ package: "@acme/app" }],
+    jobs: ["verify"],
+    tasks: ["typecheck"],
+    scripts: {
+      "sync:check": "sync check"
+    }
+  }
+}
+```
+
+That can generate:
+
+```json
+{
+  "scripts": {
+    "pipeline:verify": "async-pipeline run verify",
+    "pipeline:task:typecheck": "async-pipeline run-task typecheck",
+    "pipeline:sync:check": "async-pipeline sync check"
+  }
+}
+```
+
+Task sync records ownership in `.async-pipeline/tasks.lock.json`. `sync tasks generate` never overwrites an existing unmanaged script or Deno task. If a generated command exists but is not claimed by the lock, it fails with `ASYNC_PIPELINE_SYNC_CONFLICT`.
 
 ## Cache Registry
 

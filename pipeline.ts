@@ -8,6 +8,20 @@ export default definePipeline({
     main: trigger.github({ events: ["push"], branches: ["main"] }),
     release: trigger.github({ events: ["release"] })
   },
+  sync: {
+    github: true,
+    tasks: {
+      prefix: "pipeline",
+      runners: ["package"],
+      targets: [{ package: "async-pipeline-workspace" }],
+      jobs: ["verify"],
+      scripts: {
+        "github:check": "github check",
+        "github:generate": "github generate",
+        "sync:check": "sync check"
+      }
+    }
+  },
   namedInputs: {
     default: [
       "packages/**/*.ts",

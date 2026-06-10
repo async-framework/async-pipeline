@@ -114,6 +114,55 @@ export interface TriggerDefinition {
   timezone?: string;
 }
 
+export type SyncRunner = "package" | "deno";
+export type SyncSelection = "all" | string[];
+export type SyncTargetSelector = { package: string; allowMultiple?: boolean } | { path: string; allowMultiple?: boolean };
+export type SyncTargets = "root" | SyncTargetSelector[];
+
+export interface GitHubSyncConfig {
+  workflow?: string;
+  lock?: string;
+}
+
+export type GitHubSyncInput = boolean | GitHubSyncConfig;
+
+export interface TaskSyncConfig {
+  prefix?: string;
+  runners?: "all" | SyncRunner[];
+  targets?: SyncTargets;
+  jobs?: SyncSelection;
+  tasks?: SyncSelection;
+  scripts?: Record<string, string>;
+}
+
+export type TaskSyncInput = boolean | TaskSyncConfig;
+
+export interface PipelineSyncConfig {
+  github?: GitHubSyncInput;
+  tasks?: TaskSyncInput;
+}
+
+export interface NormalizedGitHubSyncConfig {
+  enabled: boolean;
+  workflow: string;
+  lock: string;
+}
+
+export interface NormalizedTaskSyncConfig {
+  enabled: boolean;
+  prefix: string;
+  runners: "all" | SyncRunner[];
+  targets: SyncTargets;
+  jobs: SyncSelection;
+  tasks?: SyncSelection;
+  scripts: Record<string, string>;
+}
+
+export interface NormalizedPipelineSync {
+  github: NormalizedGitHubSyncConfig;
+  tasks: NormalizedTaskSyncConfig;
+}
+
 export interface DependsOnDirective {
   kind: "async-pipeline.directive.dependsOn";
   taskIds: TaskId[];
@@ -202,6 +251,7 @@ export interface PipelineDefinition {
   namedInputs?: Record<string, string[]>;
   taskDefaults?: Record<string, Partial<TaskDefinition>>;
   triggers?: Record<TriggerId, TriggerDefinition>;
+  sync?: PipelineSyncConfig;
   sources?: Record<SourceId, SourceDefinition>;
   tasks: Record<TaskId, TaskDefinition>;
   jobs: Record<JobId, JobDefinition>;
@@ -212,6 +262,7 @@ export interface NormalizedPipeline {
   cache: CacheRegistryDefinition;
   namedInputs: Record<string, string[]>;
   triggers: Record<TriggerId, TriggerDefinition>;
+  sync: NormalizedPipelineSync;
   sources: Record<SourceId, NormalizedSource>;
   tasks: Record<TaskId, NormalizedTask>;
   jobs: Record<JobId, NormalizedJob>;
@@ -403,6 +454,7 @@ export function normalizePipeline(definition: PipelineDefinition): NormalizedPip
     cache: cacheRegistry,
     namedInputs,
     triggers: definition.triggers ?? {},
+    sync: normalizeSync(definition.sync),
     sources,
     tasks,
     jobs
@@ -445,6 +497,8 @@ export function validatePipeline(pipeline: NormalizedPipeline): void {
       }
     }
   }
+
+  validateSyncConfig(pipeline);
 
   buildGraph(pipeline);
 }
@@ -688,6 +742,93 @@ function normalizeCacheRegistry(cache: PipelineDefinition["cache"]): CacheRegist
     return mergeWithDefaultCacheStores(cache);
   }
   return mergeWithDefaultCacheStores(defineCache(cache));
+}
+
+function normalizeSync(sync: PipelineDefinition["sync"]): NormalizedPipelineSync {
+  return {
+    github: normalizeGitHubSync(sync?.github),
+    tasks: normalizeTaskSync(sync?.tasks)
+  };
+}
+
+function normalizeGitHubSync(github: GitHubSyncInput | undefined): NormalizedGitHubSyncConfig {
+  if (github === undefined || github === false) {
+    return {
+      enabled: false,
+      workflow: ".github/workflows/async-pipeline.yml",
+      lock: ".github/async-pipeline.lock.json"
+    };
+  }
+  if (github === true) {
+    return {
+      enabled: true,
+      workflow: ".github/workflows/async-pipeline.yml",
+      lock: ".github/async-pipeline.lock.json"
+    };
+  }
+  return {
+    enabled: true,
+    workflow: github.workflow ?? ".github/workflows/async-pipeline.yml",
+    lock: github.lock ?? ".github/async-pipeline.lock.json"
+  };
+}
+
+function normalizeTaskSync(tasks: TaskSyncInput | undefined): NormalizedTaskSyncConfig {
+  if (tasks === undefined || tasks === false) {
+    return {
+      enabled: false,
+      prefix: "pipeline",
+      runners: "all",
+      targets: "root",
+      jobs: "all",
+      scripts: {}
+    };
+  }
+  if (tasks === true) {
+    return {
+      enabled: true,
+      prefix: "pipeline",
+      runners: "all",
+      targets: "root",
+      jobs: "all",
+      scripts: {}
+    };
+  }
+  return {
+    enabled: true,
+    prefix: tasks.prefix ?? "pipeline",
+    runners: tasks.runners ? normalizeRunners(tasks.runners) : "all",
+    targets: tasks.targets ?? "root",
+    jobs: tasks.jobs ?? "all",
+    tasks: tasks.tasks,
+    scripts: { ...(tasks.scripts ?? {}) }
+  };
+}
+
+function normalizeRunners(runners: "all" | SyncRunner[]): "all" | SyncRunner[] {
+  if (runners === "all") return runners;
+  return [...new Set(runners)];
+}
+
+function validateSyncConfig(pipeline: NormalizedPipeline): void {
+  const taskSync = pipeline.sync.tasks;
+  if (!taskSync.enabled) return;
+  if (!taskSync.prefix.trim()) {
+    throw pipelineError("ASYNC_PIPELINE_SYNC_INVALID_PREFIX", "Task sync prefix cannot be empty.");
+  }
+  if (Array.isArray(taskSync.runners) && taskSync.runners.length === 0) {
+    throw pipelineError("ASYNC_PIPELINE_SYNC_INVALID_RUNNERS", "Task sync runners cannot be empty.");
+  }
+  if (Array.isArray(taskSync.jobs)) {
+    for (const jobId of taskSync.jobs) {
+      if (!pipeline.jobs[jobId]) throw pipelineError("ASYNC_PIPELINE_SYNC_UNKNOWN_JOB", `Task sync references missing job "${jobId}".`);
+    }
+  }
+  if (Array.isArray(taskSync.tasks)) {
+    for (const taskId of taskSync.tasks) {
+      if (!pipeline.tasks[taskId]) throw pipelineError("ASYNC_PIPELINE_SYNC_UNKNOWN_TASK", `Task sync references missing task "${taskId}".`);
+    }
+  }
 }
 
 function normalizeCache(cache: TaskDefinition["cache"] | CacheDirective, registry: CacheRegistryDefinition): TaskCacheOptions {

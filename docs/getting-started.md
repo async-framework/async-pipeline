@@ -163,6 +163,8 @@ GitHub starts workflows from committed YAML, so generate the bootloader from `pi
 
 ```sh
 pnpm async-pipeline github generate
+# or, when sync.github is configured:
+pnpm async-pipeline sync github generate
 ```
 
 Commit the generated files:
@@ -188,6 +190,34 @@ pnpm async-pipeline github generate --workflow .tmp/workflow.yml --lock .tmp/loc
 pnpm async-pipeline github check --workflow .tmp/workflow.yml --lock .tmp/lock.json
 ```
 
+## 5. Sync Package Tasks
+
+Use `sync.tasks` when `pipeline.ts` should also own package-manager commands:
+
+```ts
+sync: {
+  tasks: true
+}
+```
+
+Then generate or check the package scripts and lock:
+
+```sh
+pnpm async-pipeline sync tasks generate
+pnpm async-pipeline sync tasks check
+```
+
+The distinction is:
+
+```txt
+tasks     = what can run
+jobs      = named entrypoints
+triggers  = when jobs should run
+sync      = generated files to keep current
+```
+
+Triggers describe when jobs should run. Sync describes which generated files should be kept current.
+
 ## What To Commit
 
 Commit:
@@ -195,6 +225,7 @@ Commit:
 - `pipeline.ts`, `pipeline.mjs`, or `pipeline.js`
 - `.github/workflows/async-pipeline.yml`
 - `.github/async-pipeline.lock.json`
+- `.async-pipeline/tasks.lock.json` when `sync.tasks` is configured
 - package metadata and lockfile changes
 - docs that explain the project pipeline
 

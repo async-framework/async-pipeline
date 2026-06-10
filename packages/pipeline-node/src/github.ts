@@ -46,8 +46,8 @@ export interface GitHubEventContext {
 }
 
 export async function renderGitHubWorkflow(pipeline: NormalizedPipeline, options: GitHubRenderOptions): Promise<GitHubRenderResult> {
-  const workflowPath = options.workflowPath ?? GITHUB_WORKFLOW_PATH;
-  const lockPath = options.lockPath ?? GITHUB_LOCK_PATH;
+  const workflowPath = options.workflowPath ?? pipeline.sync.github.workflow ?? GITHUB_WORKFLOW_PATH;
+  const lockPath = options.lockPath ?? pipeline.sync.github.lock ?? GITHUB_LOCK_PATH;
   const packageInfo = await readPackageInfo(options.cwd);
   const renderModel = buildRenderModel(pipeline, {
     configPath: relativePath(options.cwd, options.configPath),

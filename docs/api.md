@@ -28,6 +28,7 @@ definePipeline({
   namedInputs: {},
   taskDefaults: {},
   triggers: {},
+  sync: {},
   sources: {},
   tasks: {},
   jobs: {}
@@ -43,11 +44,23 @@ Fields:
 | `namedInputs` | Reusable input groups referenced by task `inputs`. |
 | `taskDefaults` | Defaults applied by exact task id or task name segment. |
 | `triggers` | Named trigger declarations. |
+| `sync` | Generated files that should stay current. |
 | `sources` | Explicit local or git repos whose pipeline can be composed into this graph. |
 | `tasks` | Task map. |
 | `jobs` | Job map. |
 
 Pipeline definitions are metadata. Importing a pipeline, calling `definePipeline`, using directives, or reading metadata does not execute tasks, open cache connections, start cron, clone repos, or evaluate function steps.
+
+The core model is:
+
+```txt
+tasks     = what can run
+jobs      = named entrypoints
+triggers  = when jobs should run
+sync      = generated files to keep current
+```
+
+Triggers describe when jobs should run. Sync describes which generated files should be kept current.
 
 ## task
 
@@ -249,15 +262,92 @@ trigger.schedule("0 9 * * 1"); // compatibility alias
 
 Triggers are declarations. Use `async-pipeline github generate` to render them into committed GitHub Actions YAML. GitHub cannot start a cron or push workflow from TypeScript alone.
 
+## sync
+
+```ts
+definePipeline({
+  name: "app",
+  sync: {
+    github: true,
+    tasks: true
+  },
+  tasks: {},
+  jobs: {}
+});
+```
+
+`sync.github: true` uses the default generated paths:
+
+```txt
+.github/workflows/async-pipeline.yml
+.github/async-pipeline.lock.json
+```
+
+Use object form to render elsewhere, which is useful in tests:
+
+```ts
+sync: {
+  github: {
+    workflow: ".tmp/async-pipeline.yml",
+    lock: ".tmp/async-pipeline.lock.json"
+  }
+}
+```
+
+`sync.tasks: true` syncs all jobs, not raw tasks, into the root package-manager manifest with the `pipeline` prefix. Package manifests receive `scripts`; Deno manifests receive `tasks`.
+
+```json
+{
+  "scripts": {
+    "pipeline:verify": "async-pipeline run verify"
+  }
+}
+```
+
+Use object form for explicit targets:
+
+```ts
+sync: {
+  tasks: {
+    prefix: "pipeline",
+    runners: ["package"],
+    targets: [
+      { package: "@acme/app" },
+      { path: "tools/worker/deno.json" }
+    ],
+    jobs: ["verify"],
+    tasks: ["typecheck"],
+    scripts: {
+      "sync:check": "sync check"
+    }
+  }
+}
+```
+
+Package targets match `package.json#name`. Path targets must point at `package.json`, `deno.json`, or `deno.jsonc`. Raw task sync is opt-in and generates names like `pipeline:task:typecheck`.
+
+Task sync writes `.async-pipeline/tasks.lock.json`. The lock records the generator version, config path, prefix, runners, targets, resolved manifest paths, generated command names and values, and a rendered hash. Existing unmanaged scripts or Deno tasks are never overwritten; conflicts throw `ASYNC_PIPELINE_SYNC_CONFLICT`.
+
 ## GitHub Commands
 
 ```sh
+async-pipeline sync list
+async-pipeline sync generate
+async-pipeline sync check
+async-pipeline sync github list
+async-pipeline sync github generate [--workflow <path>] [--lock <path>]
+async-pipeline sync github check [--workflow <path>] [--lock <path>]
+async-pipeline sync tasks list
+async-pipeline sync tasks generate
+async-pipeline sync tasks check
 async-pipeline github generate [--workflow <path>] [--lock <path>]
 async-pipeline github check [--workflow <path>] [--lock <path>]
 async-pipeline github run
 ```
 
-`github generate` writes `.github/workflows/async-pipeline.yml` and `.github/async-pipeline.lock.json`.
+`github generate` and `github check` are compatibility aliases for the GitHub sync implementation.
+
+`github generate` writes `.github/workflows/async-pipeline.yml` and `.github/async-pipeline.lock.json` unless paths are overridden.
 
 `github check` fails when generated files are stale.
 

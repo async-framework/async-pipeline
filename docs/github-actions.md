@@ -4,6 +4,8 @@ GitHub Actions is the bootloader. `pipeline.ts` owns the workflow logic.
 
 GitHub decides whether to start a workflow from committed YAML before `@async/pipeline` code runs. That means `push`, `pull_request`, `schedule`, `release`, and `workflow_dispatch` must exist in `.github/workflows/*.yml`. The pipeline CLI generates that YAML from metadata-safe trigger declarations.
 
+Triggers describe when jobs should run. Sync describes which generated files should be kept current.
+
 ## Author Triggers In TypeScript
 
 ```ts
@@ -15,6 +17,9 @@ export default definePipeline({
     pr: trigger.github({ events: ["pull_request"] }),
     main: trigger.github({ events: ["push"], branches: ["main"] }),
     nightly: trigger.cron("17 2 * * *")
+  },
+  sync: {
+    github: true
   },
   tasks: {
     verify: task({ run: sh`pnpm test` })
@@ -30,6 +35,8 @@ export default definePipeline({
 
 ```sh
 async-pipeline github generate
+# or
+async-pipeline sync github generate
 ```
 
 This writes:
@@ -56,6 +63,8 @@ For tests or scratch generation, override both generated paths:
 ```sh
 async-pipeline github generate --workflow .tmp/async-pipeline.yml --lock .tmp/async-pipeline.lock.json
 async-pipeline github check --workflow .tmp/async-pipeline.yml --lock .tmp/async-pipeline.lock.json
+async-pipeline sync github generate --workflow .tmp/async-pipeline.yml --lock .tmp/async-pipeline.lock.json
+async-pipeline sync github check --workflow .tmp/async-pipeline.yml --lock .tmp/async-pipeline.lock.json
 ```
 
 ## Check For Drift
@@ -64,6 +73,8 @@ Use this locally and in CI:
 
 ```sh
 async-pipeline github check
+# or
+async-pipeline sync github check
 ```
 
 The command loads `pipeline.ts`, recomputes the GitHub-relevant metadata hash, renders the workflow again, and fails if either generated file is stale.

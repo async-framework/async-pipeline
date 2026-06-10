@@ -150,6 +150,83 @@ test("normalizes cron and filtered github triggers", () => {
   assert.equal(pipeline.triggers.nightly.timezone, "UTC");
 });
 
+test("normalizes sync github and task defaults independently from triggers", () => {
+  const pipeline = definePipeline({
+    name: "test",
+    triggers: {
+      main: trigger.github({ events: ["push"], branches: ["main"] })
+    },
+    sync: {
+      github: true,
+      tasks: true
+    },
+    tasks: {
+      build: task({ run: sh`echo build` })
+    },
+    jobs: {
+      verify: job({ target: "build", trigger: ["main"] })
+    }
+  });
+
+  assert.equal(pipeline.sync.github.enabled, true);
+  assert.equal(pipeline.sync.github.workflow, ".github/workflows/async-pipeline.yml");
+  assert.equal(pipeline.sync.tasks.enabled, true);
+  assert.equal(pipeline.sync.tasks.prefix, "pipeline");
+  assert.equal(pipeline.sync.tasks.runners, "all");
+  assert.equal(pipeline.sync.tasks.targets, "root");
+  assert.equal(pipeline.sync.tasks.jobs, "all");
+  assert.deepEqual(pipeline.triggers.main.branches, ["main"]);
+});
+
+test("normalizes explicit sync task config and validates selected ids", () => {
+  const pipeline = definePipeline({
+    name: "test",
+    sync: {
+      github: {
+        workflow: ".tmp/workflow.yml",
+        lock: ".tmp/lock.json"
+      },
+      tasks: {
+        prefix: "ci",
+        runners: ["package"],
+        targets: [{ package: "fixture" }],
+        jobs: ["verify"],
+        tasks: ["build"],
+        scripts: {
+          "sync:check": "sync check"
+        }
+      }
+    },
+    tasks: {
+      build: task({ run: sh`echo build` })
+    },
+    jobs: {
+      verify: job({ target: "build" })
+    }
+  });
+
+  assert.equal(pipeline.sync.github.workflow, ".tmp/workflow.yml");
+  assert.deepEqual(pipeline.sync.tasks.runners, ["package"]);
+  assert.deepEqual(pipeline.sync.tasks.jobs, ["verify"]);
+  assert.deepEqual(pipeline.sync.tasks.tasks, ["build"]);
+  assert.equal(pipeline.sync.tasks.scripts["sync:check"], "sync check");
+
+  assert.throws(() => definePipeline({
+    name: "bad",
+    sync: {
+      tasks: {
+        jobs: ["missing"]
+      }
+    },
+    tasks: {
+      build: task({ run: sh`echo build` })
+    },
+    jobs: {
+      verify: job({ target: "build" })
+    }
+  }), (error) => error.code === "ASYNC_PIPELINE_SYNC_UNKNOWN_JOB");
+});
+
 test("normalizes timeout durations", () => {
   const pipeline = definePipeline({
     name: "test",

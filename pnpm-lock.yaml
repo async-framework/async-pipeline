@@ -8,6 +8,9 @@ importers:
 
   .:
     devDependencies:
+      '@async/pipeline':
+        specifier: workspace:*
+        version: link:packages/pipeline
       '@types/node':
         specifier: 24.12.4
         version: 24.12.4

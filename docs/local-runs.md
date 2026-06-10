@@ -68,6 +68,15 @@ Generate or check the GitHub Actions bootloader:
 ```sh
 pnpm async-pipeline github generate
 pnpm async-pipeline github check
+pnpm async-pipeline sync github generate
+pnpm async-pipeline sync github check
+```
+
+Generate or check package-manager tasks from `sync.tasks`:
+
+```sh
+pnpm async-pipeline sync tasks generate
+pnpm async-pipeline sync tasks check
 ```
 
 Use `--workflow <path>` and `--lock <path>` when you want to render/check generated files outside `.github/`, such as in tests.

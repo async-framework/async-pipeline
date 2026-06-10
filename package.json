@@ -8,14 +8,19 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "pnpm -r --sort build",
-    "typecheck": "pnpm build && pnpm -r --sort typecheck",
-    "test": "pnpm build && node --test tests/*.test.js",
     "async-pipeline": "node packages/pipeline-node/dist/cli.js",
+    "build": "pnpm -r --sort build",
     "pack:check": "pnpm --filter @async/pipeline pack:check",
-    "release:check": "pnpm typecheck && pnpm test && pnpm async-pipeline run verify && pnpm pack:check"
+    "pipeline:github:check": "async-pipeline github check",
+    "pipeline:github:generate": "async-pipeline github generate",
+    "pipeline:sync:check": "async-pipeline sync check",
+    "pipeline:verify": "async-pipeline run verify",
+    "release:check": "pnpm typecheck && pnpm test && pnpm pipeline:sync:check && pnpm async-pipeline run verify && pnpm pack:check",
+    "test": "pnpm build && node --test tests/*.test.js",
+    "typecheck": "pnpm build && pnpm -r --sort typecheck"
   },
   "devDependencies": {
+    "@async/pipeline": "workspace:*",
     "@types/node": "24.12.4",
     "typescript": "6.0.3"
   }

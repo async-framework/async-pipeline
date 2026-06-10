@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { buildGraph, composePipelines, tasksForJob } from "@async/pipeline-core";
 import { runDoctor } from "./doctor.js";
+import { checkGitHubWorkflow, jobsForGitHubEvent, readGitHubEventContext, renderGitHubWorkflow, writeGitHubWorkflow } from "./github.js";
 import { loadPipeline } from "./loader.js";
 import { runJob, runSingleTask } from "./runner.js";
 import { createStore } from "./store.js";
@@ -33,6 +34,47 @@ async function main(): Promise<void> {
   }
 
   const pipeline = await loadPipeline(configPath);
+
+  if (command === "github") {
+    const subcommand = args[0] ?? "help";
+    const paths = githubGenerationPaths(args.slice(1));
+    const rendered = await renderGitHubWorkflow(pipeline, { cwd, configPath, ...paths });
+    if (subcommand === "generate") {
+      await writeGitHubWorkflow(rendered, cwd);
+      console.log(`Generated ${rendered.workflowPath}`);
+      console.log(`Generated ${rendered.lockPath}`);
+      return;
+    }
+    if (subcommand === "check") {
+      const issues = await checkGitHubWorkflow(rendered, cwd);
+      if (issues.length > 0) {
+        for (const issue of issues) console.error(issue);
+        process.exitCode = 1;
+        return;
+      }
+      console.log("GitHub workflow is current.");
+      return;
+    }
+    if (subcommand === "run") {
+      const context = await readGitHubEventContext(process.env);
+      const jobs = jobsForGitHubEvent(pipeline, context);
+      if (jobs.length === 0) {
+        console.log(`No pipeline jobs matched GitHub event "${context.eventName}".`);
+        return;
+      }
+      let failed = false;
+      for (const selectedJob of jobs) {
+        const graph = tasksForJob(pipeline, selectedJob.id);
+        console.log(`Running ${pipeline.name}:${selectedJob.id} (${graph.executionOrder.join(" -> ")})`);
+        const result = await runJob(pipeline, { cwd, jobId: selectedJob.id, mode: "ci" });
+        console.log(`Pipeline ${result.status}: ${result.id}`);
+        if (result.status !== "passed") failed = true;
+      }
+      process.exitCode = failed ? 1 : 0;
+      return;
+    }
+    throw new Error(`Unknown github command "${subcommand}".`);
+  }
 
   if (command === "list") {
     console.log("Jobs:");
@@ -166,6 +208,9 @@ function printHelp(program: string): void {
   ${program} sources sync
   ${program} metadata --format json [--include-sources]
   ${program} matrix <job> --format github
+  ${program} github generate [--workflow <path>] [--lock <path>]
+  ${program} github check [--workflow <path>] [--lock <path>]
+  ${program} github run
   ${program} doctor`);
 }
 
@@ -185,6 +230,16 @@ function programName(): string {
 function jsonReplacer(_key: string, value: unknown): unknown {
   if (typeof value === "function") return "[function]";
   return value;
+}
+
+function githubGenerationPaths(args: string[]): { workflowPath?: string; lockPath?: string } {
+  const workflowIndex = args.indexOf("--workflow");
+  const lockIndex = args.indexOf("--lock");
+  const workflowPath = workflowIndex >= 0 ? args[workflowIndex + 1] : undefined;
+  const lockPath = lockIndex >= 0 ? args[lockIndex + 1] : undefined;
+  if (workflowIndex >= 0 && !workflowPath) throw new Error("Usage: async-pipeline github <generate|check> --workflow <path>");
+  if (lockIndex >= 0 && !lockPath) throw new Error("Usage: async-pipeline github <generate|check> --lock <path>");
+  return { workflowPath, lockPath };
 }
 
 async function loadAvailableSourceGraph(pipeline: Awaited<ReturnType<typeof loadPipeline>>, cwd: string, store: Awaited<ReturnType<typeof createStore>>) {

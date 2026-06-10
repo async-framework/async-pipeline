@@ -1,7 +1,13 @@
-import { definePipeline, job, sh, task } from "./packages/pipeline/dist/index.js";
+import { definePipeline, job, sh, task, trigger } from "./packages/pipeline/dist/index.js";
 
 export default definePipeline({
   name: "async-pipeline",
+  cache: "file:cache-first",
+  triggers: {
+    pr: trigger.github({ events: ["pull_request"] }),
+    main: trigger.github({ events: ["push"], branches: ["main"] }),
+    release: trigger.github({ events: ["release"] })
+  },
   namedInputs: {
     default: [
       "packages/**/*.ts",
@@ -45,6 +51,7 @@ export default definePipeline({
   jobs: {
     verify: job({
       target: "pack",
+      trigger: ["pr", "main", "release"],
       mode: process.env.CI ? "ci" : "manual"
     })
   }

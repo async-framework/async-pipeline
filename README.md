@@ -220,6 +220,15 @@ export default definePipeline({
 });
 ```
 
+How it works:
+
+- `source.git(...)` declares the repo, ref, and pipeline file to compose.
+- The CLI clones git sources into `.async/sources/<source-id>/<hash>` when you run `async-pipeline sources sync`, `async-pipeline run <job>`, or `async-pipeline run-task <source>:<task>`.
+- The hash is derived from the source URL and ref, so repeated runs reuse the same warm checkout.
+- `prepare` runs inside that source checkout before source tasks run.
+- `ctx.candidate.dir` points back to the root repo being tested, which lets the source checkout install or link the candidate change.
+- Use `source.path(...)` instead when you want to point at a specific local checkout yourself.
+
 `@async/pipeline` does not infer reverse dependencies from package manifests, lockfiles, npm metadata, or GitHub search. The dependency map stays explicit and reviewable.
 
 ## Use It When

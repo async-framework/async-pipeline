@@ -39,6 +39,15 @@ export default definePipeline({
 });
 ```
 
+How it works:
+
+- `source.git(...)` declares a dependent repo that the CLI owns as runtime state.
+- Git sources are cloned into `.async/sources/<source-id>/<hash>` when you run `async-pipeline sources sync`, `async-pipeline run <job>`, or `async-pipeline run-task <source>:<task>`.
+- The hash is derived from the source URL and ref, so repeated runs reuse the same warm checkout.
+- `source.path(...)` points at a local checkout you own. Use it when you want a specific directory such as `../admin`.
+- `prepare` runs inside the source checkout before source tasks run.
+- `ctx.candidate.dir` points back to the root repo being tested, which lets the source checkout install or link the candidate change.
+
 Each source repo must have its own pipeline file. Root tasks reference source tasks with `<source>:<task>`.
 
 ## Prepare Sources

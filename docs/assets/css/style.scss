@@ -1,0 +1,325 @@
+---
+---
+
+:root {
+  color-scheme: dark;
+  --tw-dim-bg: #15202b;
+  --tw-dim-bg-soft: #192734;
+  --tw-dim-bg-raised: #1f2f3d;
+  --tw-dim-border: #38444d;
+  --tw-dim-border-soft: #2f3c47;
+  --tw-dim-text: #f7f9f9;
+  --tw-dim-text-muted: #8b98a5;
+  --tw-dim-text-soft: #cfd9de;
+  --tw-dim-blue: #1d9bf0;
+  --tw-dim-blue-soft: rgba(29, 155, 240, 0.14);
+  --tw-dim-green: #00ba7c;
+  --tw-dim-code-bg: #0f1720;
+  --tw-dim-code-border: #2f3c47;
+  --tw-dim-shadow: 0 24px 80px rgba(2, 6, 23, 0.32);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  min-height: 100%;
+  background:
+    radial-gradient(circle at 18% 0%, rgba(29, 155, 240, 0.12), transparent 28rem),
+    linear-gradient(180deg, #15202b 0%, #111923 100%);
+}
+
+body {
+  min-height: 100%;
+  margin: 0;
+  background: transparent;
+  color: var(--tw-dim-text);
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  line-height: 1.65;
+}
+
+body::before {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  content: "";
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
+  background-size: 40px 40px;
+  mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.65), transparent 70%);
+}
+
+.container-lg {
+  width: min(100% - 32px, 980px);
+  margin-inline: auto;
+}
+
+.px-3 {
+  padding-right: 0;
+  padding-left: 0;
+}
+
+.my-5 {
+  margin-top: 48px;
+  margin-bottom: 72px;
+}
+
+.markdown-body {
+  --doc-pad: clamp(24px, 4vw, 56px);
+  overflow: hidden;
+  padding: var(--doc-pad);
+  color: var(--tw-dim-text-soft);
+  background: rgba(25, 39, 52, 0.92);
+  border: 1px solid var(--tw-dim-border);
+  border-radius: 16px;
+  box-shadow: var(--tw-dim-shadow);
+}
+
+.markdown-body > h1:first-child {
+  margin: calc(-1 * var(--doc-pad)) calc(-1 * var(--doc-pad)) 44px;
+  padding: 16px var(--doc-pad);
+  color: var(--tw-dim-text-muted);
+  font-size: 0.95rem;
+  font-weight: 700;
+  line-height: 1.4;
+  letter-spacing: 0;
+  background: rgba(15, 23, 32, 0.72);
+  border-bottom: 1px solid var(--tw-dim-border);
+}
+
+.markdown-body > h1:first-child a {
+  color: var(--tw-dim-text-muted);
+  text-decoration: none;
+}
+
+.markdown-body > h1:first-child a:hover {
+  color: var(--tw-dim-blue);
+}
+
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4,
+.markdown-body h5,
+.markdown-body h6 {
+  color: var(--tw-dim-text);
+  line-height: 1.2;
+  letter-spacing: 0;
+}
+
+.markdown-body h1 {
+  margin: 0 0 16px;
+  max-width: 760px;
+  font-size: clamp(2.25rem, 5vw, 4.5rem);
+  font-weight: 800;
+}
+
+.markdown-body h1 code {
+  color: inherit;
+  font-size: inherit;
+  background: transparent;
+  border: 0;
+  padding: 0;
+}
+
+.markdown-body h2 {
+  margin-top: 48px;
+  padding-top: 28px;
+  border-top: 1px solid var(--tw-dim-border);
+  font-size: clamp(1.45rem, 3vw, 2rem);
+}
+
+.markdown-body h3 {
+  margin-top: 32px;
+  color: var(--tw-dim-text-soft);
+  font-size: 1.18rem;
+}
+
+.markdown-body p,
+.markdown-body li {
+  font-size: 1rem;
+}
+
+.markdown-body > p:first-of-type {
+  max-width: 760px;
+  margin-top: 0;
+  color: var(--tw-dim-text);
+  font-size: clamp(1.18rem, 2.4vw, 1.45rem);
+  line-height: 1.45;
+}
+
+.markdown-body > p:nth-of-type(2) {
+  max-width: 760px;
+  color: var(--tw-dim-text-muted);
+  font-size: 1.05rem;
+}
+
+.markdown-body a {
+  color: var(--tw-dim-blue);
+  text-decoration: none;
+}
+
+.markdown-body a:hover {
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 3px;
+}
+
+.markdown-body strong {
+  color: var(--tw-dim-text);
+}
+
+.markdown-body ul,
+.markdown-body ol {
+  padding-left: 1.45rem;
+}
+
+.markdown-body li + li {
+  margin-top: 0.35rem;
+}
+
+.markdown-body li::marker {
+  color: var(--tw-dim-blue);
+}
+
+.markdown-body blockquote {
+  margin-inline: 0;
+  padding: 0.85rem 1rem;
+  color: var(--tw-dim-text-muted);
+  background: rgba(15, 23, 32, 0.48);
+  border-left: 4px solid var(--tw-dim-blue);
+  border-radius: 0 10px 10px 0;
+}
+
+.markdown-body code,
+.markdown-body tt {
+  padding: 0.15em 0.38em;
+  color: var(--tw-dim-text);
+  background: var(--tw-dim-code-bg);
+  border: 1px solid var(--tw-dim-code-border);
+  border-radius: 6px;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.9em;
+}
+
+.markdown-body pre {
+  overflow-x: auto;
+  margin: 1rem 0 1.5rem;
+  padding: 18px 20px;
+  color: var(--tw-dim-text-soft);
+  background: var(--tw-dim-code-bg);
+  border: 1px solid var(--tw-dim-border-soft);
+  border-radius: 12px;
+}
+
+.markdown-body pre code,
+.markdown-body pre tt {
+  padding: 0;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  font-size: 0.92rem;
+  line-height: 1.65;
+}
+
+.markdown-body .highlight pre,
+.markdown-body pre {
+  background: linear-gradient(180deg, #101923 0%, #0d141d 100%);
+}
+
+.markdown-body .highlight {
+  background: transparent;
+}
+
+.markdown-body .k,
+.markdown-body .kd,
+.markdown-body .kn,
+.markdown-body .nt,
+.markdown-body .o {
+  color: #ff7eb6;
+}
+
+.markdown-body .s,
+.markdown-body .s1,
+.markdown-body .s2,
+.markdown-body .dl {
+  color: #a3e635;
+}
+
+.markdown-body .na,
+.markdown-body .nx,
+.markdown-body .nb {
+  color: #7dd3fc;
+}
+
+.markdown-body table {
+  display: block;
+  width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+}
+
+.markdown-body th,
+.markdown-body td {
+  padding: 0.75rem 0.9rem;
+  border: 1px solid var(--tw-dim-border);
+}
+
+.markdown-body th {
+  color: var(--tw-dim-text);
+  background: rgba(15, 23, 32, 0.6);
+}
+
+.markdown-body tr {
+  background: transparent;
+  border-top: 1px solid var(--tw-dim-border);
+}
+
+.markdown-body tr:nth-child(2n) {
+  background: rgba(15, 23, 32, 0.24);
+}
+
+.markdown-body hr {
+  height: 1px;
+  margin: 32px 0;
+  background: var(--tw-dim-border);
+  border: 0;
+}
+
+@media (max-width: 720px) {
+  .container-lg {
+    width: min(100% - 20px, 980px);
+  }
+
+  .my-5 {
+    margin-top: 10px;
+    margin-bottom: 28px;
+  }
+
+  .markdown-body {
+    --doc-pad: 22px;
+    padding: 22px;
+    border-radius: 12px;
+  }
+
+  .markdown-body > h1:first-child {
+    margin-bottom: 28px;
+    padding-top: 14px;
+    padding-bottom: 14px;
+  }
+
+  .markdown-body h2 {
+    margin-top: 36px;
+    padding-top: 22px;
+  }
+
+  .markdown-body pre {
+    margin-right: -8px;
+    margin-left: -8px;
+    padding: 16px;
+  }
+}

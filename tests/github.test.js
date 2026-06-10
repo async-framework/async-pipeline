@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { test } from "node:test";
-import { definePipeline, job, sh, task, trigger } from "../packages/pipeline-core/dist/index.js";
+import { definePipeline, env, job, sh, task, trigger } from "../packages/pipeline-core/dist/index.js";
 import { jobsForGitHubEvent, renderGitHubWorkflow } from "../packages/pipeline-node/dist/index.js";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -39,9 +39,63 @@ test("renders github workflow triggers and bootloader steps", async () => {
     assert.match(rendered.workflow, /push:/);
     assert.match(rendered.workflow, /schedule:/);
     assert.match(rendered.workflow, /async-pipeline github check/);
-    assert.match(rendered.workflow, /async-pipeline github run/);
+    assert.match(rendered.workflow, /async-pipeline run verify/);
     assert.equal(rendered.lock.workflow, ".github/workflows/async-pipeline.yml");
     assert.equal(rendered.lock.jobs[0].id, "verify");
+  } finally {
+    rmSync(dir, { force: true, recursive: true });
+  }
+});
+
+test("renders github job environment and secret env wiring", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "async-pipeline-github-env-"));
+  try {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ packageManager: "pnpm@10.20.0" }), "utf8");
+    const pipeline = definePipeline({
+      name: "test",
+      env: {
+        NODE_VERSION: env.var("NODE_VERSION", { default: "24" })
+      },
+      triggers: {
+        publish: trigger.manual()
+      },
+      tasks: {
+        publish: task({
+          requires: { secrets: ["NPM_TOKEN"] },
+          run: sh`npm publish`
+        })
+      },
+      jobs: {
+        publish: job({
+          target: "publish",
+          trigger: ["publish"],
+          env: {
+            NODE_AUTH_TOKEN: env.secret("NPM_TOKEN"),
+            PUBLISH_REGISTRY: "https://registry.npmjs.org/"
+          },
+          github: {
+            environment: "npm-publish",
+            permissions: {
+              contents: "read",
+              idToken: "write"
+            }
+          }
+        })
+      }
+    });
+
+    const rendered = await renderGitHubWorkflow(pipeline, { cwd: dir, configPath: join(dir, "pipeline.ts") });
+
+    assert.match(rendered.workflow, /publish:/);
+    assert.match(rendered.workflow, /if: github\.event_name == 'workflow_dispatch'/);
+    assert.match(rendered.workflow, /environment: "npm-publish"/);
+    assert.match(rendered.workflow, /permissions:\n      contents: read\n      id-token: write/);
+    assert.match(rendered.workflow, /NODE_AUTH_TOKEN: \$\{\{ secrets\.NPM_TOKEN \}\}/);
+    assert.match(rendered.workflow, /NODE_VERSION: \$\{\{ vars\.NODE_VERSION \}\}/);
+    assert.match(rendered.workflow, /PUBLISH_REGISTRY: "https:\/\/registry\.npmjs\.org\/"/);
+    assert.match(rendered.workflow, /async-pipeline run publish/);
+    assert.equal(rendered.lock.jobs[0].github.environment, "npm-publish");
+    assert.equal(rendered.lock.jobs[0].env.NODE_AUTH_TOKEN.kind, "async-pipeline.env.secret");
   } finally {
     rmSync(dir, { force: true, recursive: true });
   }

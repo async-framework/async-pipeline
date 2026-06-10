@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
-import type { CandidateContext, ExecutionRecord, NormalizedPipeline, NormalizedTask, ShellCommand, TaskContext, TaskResult, TaskRunFunction, TaskSourceContext, TaskStep } from "@async/pipeline-core";
+import type { CandidateContext, EnvValue, ExecutionRecord, NormalizedPipeline, NormalizedTask, ShellCommand, TaskContext, TaskResult, TaskRunFunction, TaskSourceContext, TaskStep } from "@async/pipeline-core";
 import { sh, tasksForJob } from "@async/pipeline-core";
 import { computeTaskCacheKey, createStore, readCacheEntry, writeCacheEntry, writeExecution, writeTaskLog, type PipelineStore } from "./store.js";
 import { createRunPlan, sourceContext, type ResolvedSource } from "./sources.js";
@@ -60,6 +60,11 @@ export async function runJob(pipeline: NormalizedPipeline, options: RunOptions):
 
   await writeExecution(store, record);
   const preparedSources = new Set<string>();
+  const jobDefinition = plan.pipeline.jobs[options.jobId];
+  const envDefinitions = {
+    ...plan.pipeline.env,
+    ...(jobDefinition?.env ?? {})
+  };
 
   for (const taskId of graph.executionOrder) {
     const taskDefinition = plan.pipeline.tasks[taskId];
@@ -94,6 +99,7 @@ export async function runJob(pipeline: NormalizedPipeline, options: RunOptions):
       rootCwd: options.cwd,
       runId: record.id,
       source: taskDefinition.source,
+      envDefinitions,
       sourcePrepareCommands: taskSource ? await resolvePrepareCommands(taskSource, {
         candidate: plan.candidate,
         rootCwd: options.cwd,
@@ -139,6 +145,7 @@ async function runTask(
     rootCwd: string;
     runId: string;
     source?: TaskSourceContext;
+    envDefinitions: Record<string, EnvValue>;
     sourcePrepareCommands?: ShellCommand[];
     store: PipelineStore;
   }
@@ -147,9 +154,34 @@ async function runTask(
   const startedAt = new Date().toISOString();
   const metadata: Record<string, string | number | boolean | null> = {};
   let combinedLog = "";
+  let taskEnv: NodeJS.ProcessEnv;
+  try {
+    taskEnv = buildTaskEnv(process.env, {
+      candidate: options.candidate,
+      envDefinitions: options.envDefinitions,
+      rootCwd: options.rootCwd,
+      source: options.source,
+      taskId: taskDefinition.id
+    });
+  } catch (error) {
+    const lastError = error instanceof Error ? error.message : String(error);
+    await writeTaskLog(options.store, options.runId, taskDefinition.id, `[env] ${lastError}\n`);
+    return {
+      id: taskDefinition.id,
+      status: "failed",
+      startedAt,
+      finishedAt: new Date().toISOString(),
+      durationMs: Date.now() - started,
+      attempts: 0,
+      cacheHit: false,
+      error: lastError,
+      metadata
+    };
+  }
   const context = createTaskContext(taskDefinition, {
     candidate: options.candidate,
     cwd: options.cwd,
+    env: taskEnv,
     metadata,
     rootCwd: options.rootCwd,
     runId: options.runId,
@@ -199,6 +231,12 @@ async function runTask(
         }
       }
 
+      for (const secret of taskDefinition.requires?.secrets ?? []) {
+        if (!process.env[secret]) {
+          throw new Error(`Required secret "${secret}" is not available for task "${taskDefinition.id}".`);
+        }
+      }
+
       for (const step of resolvedSteps) {
         if (typeof step === "function") {
           await runFunctionStep(step, context, taskDefinition.timeoutMs);
@@ -207,7 +245,7 @@ async function runTask(
         if (!isShellCommand(step)) {
           throw new Error(`Deferred shell step for task "${taskDefinition.id}" was not resolved.`);
         }
-        const result = await runShellStep(step, taskDefinition, options);
+        const result = await runShellStep(step, taskDefinition, { ...options, env: taskEnv });
         combinedLog += result.stdout;
         combinedLog += result.stderr;
         if (result.timedOut) {
@@ -263,15 +301,11 @@ async function runTask(
 async function runShellStep(
   step: ShellCommand,
   taskDefinition: NormalizedTask,
-  options: { adapter: RunnerAdapter; cwd: string; rootCwd: string; candidate: CandidateContext; source?: TaskSourceContext }
+  options: { adapter: RunnerAdapter; cwd: string; env: NodeJS.ProcessEnv }
 ): Promise<CommandResult> {
   return options.adapter.runShell(step.command, {
     cwd: options.cwd,
-    env: buildTaskEnv(process.env, {
-      candidate: options.candidate,
-      rootCwd: options.rootCwd,
-      source: options.source
-    }),
+    env: options.env,
     task: taskDefinition,
     timeoutMs: taskDefinition.timeoutMs
   });
@@ -291,6 +325,11 @@ async function runSourcePrepare(
   const context = createTaskContext({ id: taskId } as NormalizedTask, {
     candidate: options.candidate,
     cwd: source.dir,
+    env: buildTaskEnv(process.env, {
+      candidate: options.candidate,
+      rootCwd: options.rootCwd,
+      source: sourceTaskContext
+    }),
     metadata: {},
     rootCwd: options.rootCwd,
     runId: options.runId,
@@ -360,6 +399,11 @@ async function resolvePrepareCommands(
   const context = createTaskContext({ id: `${source.id}:prepare` } as NormalizedTask, {
     candidate: options.candidate,
     cwd: source.dir,
+    env: buildTaskEnv(process.env, {
+      candidate: options.candidate,
+      rootCwd: options.rootCwd,
+      source: sourceContext(source)
+    }),
     metadata: {},
     rootCwd: options.rootCwd,
     runId: options.runId,
@@ -391,6 +435,7 @@ function createTaskContext(
   options: {
     candidate: CandidateContext;
     cwd: string;
+    env: NodeJS.ProcessEnv;
     metadata: Record<string, string | number | boolean | null>;
     rootCwd: string;
     runId: string;
@@ -402,11 +447,7 @@ function createTaskContext(
     taskId: taskDefinition.id,
     runId: options.runId,
     cwd: options.cwd,
-    env: buildTaskEnv(process.env, {
-      candidate: options.candidate,
-      rootCwd: options.rootCwd,
-      source: options.source
-    }),
+    env: options.env,
     root: {
       dir: options.rootCwd
     },
@@ -424,10 +465,12 @@ function createTaskContext(
 
 function buildTaskEnv(
   baseEnv: NodeJS.ProcessEnv,
-  options: { candidate: CandidateContext; rootCwd: string; source?: TaskSourceContext }
+  options: { candidate: CandidateContext; envDefinitions?: Record<string, EnvValue>; rootCwd: string; source?: TaskSourceContext; taskId?: string }
 ): NodeJS.ProcessEnv {
+  const resolvedEnv = resolveEnvDefinitions(options.envDefinitions ?? {}, baseEnv, options.taskId);
   return {
     ...baseEnv,
+    ...resolvedEnv,
     ASYNC_PIPELINE_ROOT_DIR: options.rootCwd,
     ASYNC_PIPELINE_CANDIDATE_DIR: options.candidate.dir,
     ASYNC_PIPELINE_CANDIDATE_FINGERPRINT: options.candidate.fingerprint,
@@ -436,6 +479,41 @@ function buildTaskEnv(
     ASYNC_PIPELINE_SOURCE_REF: options.source?.ref,
     ASYNC_PIPELINE_SOURCE_COMMIT: options.source?.commit
   };
+}
+
+function resolveEnvDefinitions(definitions: Record<string, EnvValue>, baseEnv: NodeJS.ProcessEnv, taskId = "unknown"): Record<string, string> {
+  const resolved: Record<string, string> = {};
+  for (const [key, value] of Object.entries(definitions)) {
+    if (typeof value === "string") {
+      resolved[key] = value;
+      continue;
+    }
+    if (value.kind === "async-pipeline.env.secret") {
+      const secretValue = baseEnv[value.name];
+      if (secretValue === undefined || secretValue === "") {
+        throw new Error(`Required secret "${value.name}" for env "${key}" is not available for task "${taskId}".`);
+      }
+      resolved[key] = secretValue;
+      continue;
+    }
+    if (value.kind === "async-pipeline.env.var") {
+      const selector = baseEnv[value.name] ?? value.default;
+      if (selector === undefined || selector === "") {
+        throw new Error(`Required variable "${value.name}" for env "${key}" is not available for task "${taskId}".`);
+      }
+      if (value.values) {
+        const mapped = value.values[selector];
+        if (mapped === undefined) {
+          throw new Error(`Variable "${value.name}" value "${selector}" is not mapped for env "${key}" in task "${taskId}".`);
+        }
+        resolved[key] = mapped;
+      } else {
+        resolved[key] = selector;
+      }
+      continue;
+    }
+  }
+  return resolved;
 }
 
 function isShellCommand(step: TaskStep): step is ShellCommand {

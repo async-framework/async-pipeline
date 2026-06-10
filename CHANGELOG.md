@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.3 - 2026-06-10
+
+### Features
+
+- Generate one GitHub Actions job per pipeline `job(...)` so job-level CI environment and permissions can be expressed from `pipeline.ts`.
+- Add agnostic pipeline/job `env` config with `env.secret(...)` and overloaded `env.var(...)` values.
+- Resolve env before task execution so missing secrets, missing variables, or unmapped variable values fail before shell commands run.
+
+### Operational Changes
+
+- Dogfood npm publishing through the generated async-pipeline workflow with an `npm-publish` GitHub environment and `NPM_TOKEN` org secret.
+
 ## 0.1.2 - 2026-06-10
 
 ### API Changes

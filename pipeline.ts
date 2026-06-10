@@ -1,4 +1,4 @@
-import { definePipeline, job, sh, task, trigger } from "./packages/pipeline/dist/index.js";
+import { definePipeline, env, job, sh, task, trigger } from "./packages/pipeline/dist/index.js";
 
 export default definePipeline({
   name: "async-pipeline",
@@ -6,7 +6,8 @@ export default definePipeline({
   triggers: {
     pr: trigger.github({ events: ["pull_request"] }),
     main: trigger.github({ events: ["push"], branches: ["main"] }),
-    release: trigger.github({ events: ["release"] })
+    release: trigger.github({ events: ["release"] }),
+    manual: trigger.manual()
   },
   sync: {
     github: true,
@@ -60,6 +61,12 @@ export default definePipeline({
       inputs: ["production", "package.json", "packages/*/package.json"],
       cache: false,
       run: sh`pnpm pack:check`
+    }),
+    publish: task({
+      dependsOn: ["pack"],
+      inputs: ["production", "package.json", "packages/*/package.json"],
+      cache: false,
+      run: sh`cd packages/pipeline && npm publish --access public --registry https://registry.npmjs.org/ --provenance`
     })
   },
   jobs: {
@@ -67,6 +74,21 @@ export default definePipeline({
       target: "pack",
       trigger: ["pr", "main", "release"],
       mode: process.env.CI ? "ci" : "manual"
+    }),
+    publish: job({
+      target: "publish",
+      trigger: ["manual"],
+      mode: "ci",
+      env: {
+        NODE_AUTH_TOKEN: env.secret("NPM_TOKEN")
+      },
+      github: {
+        environment: "npm-publish",
+        permissions: {
+          contents: "read",
+          idToken: "write"
+        }
+      }
     })
   }
 });

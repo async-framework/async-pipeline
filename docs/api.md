@@ -7,7 +7,7 @@ This is the first public API surface for `@async/pipeline`.
 Use the public package for normal authoring:
 
 ```ts
-import { cache, defineCache, definePipeline, dependsOn, fileCache, job, memoryCache, redisCache, sh, source, task, trigger } from "@async/pipeline";
+import { cache, defineCache, definePipeline, dependsOn, env, fileCache, job, memoryCache, redisCache, sh, source, task, trigger } from "@async/pipeline";
 ```
 
 Subpaths are available for advanced use:
@@ -24,6 +24,7 @@ import { createRuntime, defineRuntime } from "@async/pipeline/runtime";
 ```ts
 definePipeline({
   name: "app",
+  env: {},
   cache: "file:cache-first",
   namedInputs: {},
   taskDefaults: {},
@@ -40,6 +41,7 @@ Fields:
 | Field | Purpose |
 | --- | --- |
 | `name` | Pipeline name written into execution records. |
+| `env` | Runtime environment inherited by every job. Values can be literals, `env.secret(...)`, or `env.var(...)`. |
 | `cache` | Optional cache registry or default cache ref. Built-in stores are `file` and `memory`. |
 | `namedInputs` | Reusable input groups referenced by task `inputs`. |
 | `taskDefaults` | Defaults applied by exact task id or task name segment. |
@@ -239,7 +241,23 @@ job({
   description: "Full verification",
   target: "build",
   trigger: ["push"],
-  mode: "ci"
+  mode: "ci",
+  env: {
+    NODE_AUTH_TOKEN: env.secret("NPM_TOKEN"),
+    API_URL: env.var("NODE_ENV", {
+      prod: "https://api.example.com",
+      dev: "http://localhost:3000"
+    }, {
+      default: "dev"
+    })
+  },
+  github: {
+    environment: "npm-publish",
+    permissions: {
+      contents: "read",
+      idToken: "write"
+    }
+  }
 })
 ```
 
@@ -250,6 +268,10 @@ Fields:
 | `target` | Task id or task ids used as the job entrypoint. |
 | `trigger` | Trigger ids attached to the job. |
 | `mode` | Optional `manual` or `ci` mode. |
+| `env` | Runtime environment for this job. Job env overrides pipeline env by key. |
+| `github` | Optional generated GitHub Actions job config for platform environment and permissions. |
+
+`env.secret(name)` reads a platform secret into a runtime env value. `env.var(name)` reads a platform variable. `env.var(name, { default })` uses a default when the variable is missing. `env.var(name, values, { default })` maps a variable value to another value before the task runs. Plain strings remain literal env values.
 
 ## trigger
 

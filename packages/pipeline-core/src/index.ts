@@ -25,6 +25,8 @@ export type EnvironmentBackend = "host" | "lima";
 export type ExecutionMode = "manual" | "ci";
 export type CacheSharing = "shared" | "private" | "locked";
 export type TaskStatus = "pending" | "running" | "passed" | "failed" | "skipped" | "cached";
+export type EnvVarMap = Record<string, string>;
+export type EnvValue = string | EnvSecretRef | EnvVarRef;
 
 export interface ShellCommand {
   kind: "shell";
@@ -102,6 +104,18 @@ export interface PipelineEnvironment {
   backend: EnvironmentBackend;
   vm?: string;
   image?: string;
+}
+
+export interface EnvSecretRef {
+  kind: "async-pipeline.env.secret";
+  name: string;
+}
+
+export interface EnvVarRef {
+  kind: "async-pipeline.env.var";
+  name: string;
+  values?: EnvVarMap;
+  default?: string;
 }
 
 export interface TriggerDefinition {
@@ -237,6 +251,8 @@ export interface JobDefinition {
   target: TaskId | TaskId[];
   trigger?: TriggerId[];
   mode?: ExecutionMode;
+  env?: Record<string, EnvValue>;
+  github?: GitHubJobConfig;
 }
 
 export interface NormalizedJob extends Omit<JobDefinition, "target" | "trigger"> {
@@ -245,8 +261,19 @@ export interface NormalizedJob extends Omit<JobDefinition, "target" | "trigger">
   trigger: TriggerId[];
 }
 
+export type GitHubPermission = "read" | "write" | "none";
+
+export interface GitHubJobConfig {
+  environment?: string;
+  permissions?: {
+    contents?: GitHubPermission;
+    idToken?: "write" | "none";
+  };
+}
+
 export interface PipelineDefinition {
   name: string;
+  env?: Record<string, EnvValue>;
   cache?: CacheRef | CacheRegistryDefinition | CacheRegistryInput | false;
   namedInputs?: Record<string, string[]>;
   taskDefaults?: Record<string, Partial<TaskDefinition>>;
@@ -259,6 +286,7 @@ export interface PipelineDefinition {
 
 export interface NormalizedPipeline {
   name: string;
+  env: Record<string, EnvValue>;
   cache: CacheRegistryDefinition;
   namedInputs: Record<string, string[]>;
   triggers: Record<TriggerId, TriggerDefinition>;
@@ -358,6 +386,29 @@ export function job(definition: JobDefinition): JobDefinition {
   return definition;
 }
 
+function envVar(name: string): EnvVarRef;
+function envVar(name: string, options: { default: string }): EnvVarRef;
+function envVar(name: string, values: EnvVarMap, options?: { default?: string }): EnvVarRef;
+function envVar(name: string, valuesOrOptions?: EnvVarMap | { default: string }, options: { default?: string } = {}): EnvVarRef {
+  if (!valuesOrOptions) return { kind: "async-pipeline.env.var", name };
+  if (isDefaultOnlyEnvOptions(valuesOrOptions) && Object.keys(valuesOrOptions).length === 1) {
+    return { kind: "async-pipeline.env.var", name, default: valuesOrOptions.default };
+  }
+  return {
+    kind: "async-pipeline.env.var",
+    name,
+    values: { ...valuesOrOptions },
+    default: options.default
+  };
+}
+
+export const env = {
+  secret(name: string): EnvSecretRef {
+    return { kind: "async-pipeline.env.secret", name };
+  },
+  var: envVar
+};
+
 export const trigger = {
   manual(): TriggerDefinition {
     return { type: "manual" };
@@ -451,6 +502,7 @@ export function normalizePipeline(definition: PipelineDefinition): NormalizedPip
 
   const pipeline: NormalizedPipeline = {
     name: definition.name,
+    env: { ...(definition.env ?? {}) },
     cache: cacheRegistry,
     namedInputs,
     triggers: definition.triggers ?? {},
@@ -462,6 +514,10 @@ export function normalizePipeline(definition: PipelineDefinition): NormalizedPip
 
   validatePipeline(pipeline);
   return pipeline;
+}
+
+function isDefaultOnlyEnvOptions(value: EnvVarMap | { default: string }): value is { default: string } {
+  return typeof value.default === "string";
 }
 
 export function validatePipeline(pipeline: NormalizedPipeline): void {

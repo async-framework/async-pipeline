@@ -15,9 +15,14 @@ permissions:
   contents: read
 
 jobs:
-  pipeline:
-    name: async-pipeline
+  publish:
+    name: publish
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    environment: "npm-publish"
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -26,6 +31,11 @@ jobs:
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: 24
+          registry-url: https://registry.npmjs.org/
+          package-manager-cache: false
+
+      - name: Use current npm
+        run: npm install -g npm@11.16.0
 
       - name: Enable pnpm
         run: |
@@ -41,12 +51,42 @@ jobs:
       - name: Check generated workflow
         run: pnpm async-pipeline github check
 
-      - name: Run matching pipeline jobs
-        run: pnpm async-pipeline github run
+      - name: Run pipeline job
+        run: pnpm async-pipeline run publish
         env:
           CI: true
-          ASYNC_PIPELINE_GITHUB_EVENT_NAME: ${{ github.event_name }}
-          ASYNC_PIPELINE_GITHUB_REF: ${{ github.ref }}
-          ASYNC_PIPELINE_GITHUB_BASE_REF: ${{ github.base_ref }}
-          ASYNC_PIPELINE_GITHUB_HEAD_REF: ${{ github.head_ref }}
-          ASYNC_PIPELINE_GITHUB_SCHEDULE: ${{ github.event.schedule }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  verify:
+    name: verify
+    if: (github.event_name == 'pull_request') || (github.event_name == 'push' && (github.ref == 'refs/heads/main')) || (github.event_name == 'release')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org/
+          package-manager-cache: false
+
+      - name: Enable pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.20.0 --activate
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build pipeline CLI
+        run: pnpm build
+
+      - name: Check generated workflow
+        run: pnpm async-pipeline github check
+
+      - name: Run pipeline job
+        run: pnpm async-pipeline run verify
+        env:
+          CI: true

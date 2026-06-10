@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
-import type { JobId, NormalizedJob, NormalizedPipeline, TriggerDefinition, TriggerId } from "@async/pipeline-core";
+import type { EnvValue, GitHubJobConfig, JobId, NormalizedJob, NormalizedPipeline, TriggerDefinition, TriggerId } from "@async/pipeline-core";
 import { pipelineError } from "@async/pipeline-core";
 
 export const GITHUB_WORKFLOW_PATH = ".github/workflows/async-pipeline.yml";
@@ -24,7 +24,7 @@ export interface GitHubLock {
   hash: string;
   generatedAt: string;
   triggers: Record<string, unknown>;
-  jobs: Array<{ id: string; target: string[]; trigger: string[] }>;
+  jobs: Array<{ id: string; target: string[]; trigger: string[]; env: Record<string, EnvValue>; github?: GitHubJobConfig; if?: string }>;
   packageManager: string;
   buildCommand?: string;
 }
@@ -167,7 +167,7 @@ function buildRenderModel(
     workflowPath: options.workflowPath,
     triggers: normalizeGitHubTriggers(usedTriggers),
     jobs: Object.values(pipeline.jobs)
-      .map((job) => ({ id: job.id, target: [...job.target], trigger: [...job.trigger] }))
+      .map((job) => ({ id: job.id, target: [...job.target], trigger: [...job.trigger], env: { ...pipeline.env, ...(job.env ?? {}) }, github: job.github, if: renderGitHubJobCondition(job, pipeline.triggers) }))
       .sort((left, right) => left.id.localeCompare(right.id)),
     packageManager: options.packageManager,
     buildCommand: options.buildCommand
@@ -213,10 +213,32 @@ function renderWorkflow(model: ReturnType<typeof buildRenderModel>): string {
     "permissions:",
     "  contents: read",
     "",
-    "jobs:",
-    "  pipeline:",
-    "    name: async-pipeline",
-    "    runs-on: ubuntu-latest",
+    "jobs:"
+  );
+  for (const job of model.jobs) renderJob(lines, model, job);
+  return `${lines.join("\n")}`;
+}
+
+function renderJob(lines: string[], model: ReturnType<typeof buildRenderModel>, job: ReturnType<typeof buildRenderModel>["jobs"][number]): void {
+  lines.push(
+    `  ${yamlKey(job.id)}:`,
+    `    name: ${job.id}`
+  );
+  if (job.if) {
+    lines.push(`    if: ${job.if}`);
+  }
+  lines.push(
+    "    runs-on: ubuntu-latest"
+  );
+  if (job.github?.environment) {
+    lines.push(`    environment: ${JSON.stringify(job.github.environment)}`);
+  }
+  if (job.github?.permissions && Object.keys(job.github.permissions).length > 0) {
+    lines.push("    permissions:");
+    if (job.github.permissions.contents) lines.push(`      contents: ${job.github.permissions.contents}`);
+    if (job.github.permissions.idToken) lines.push(`      id-token: ${job.github.permissions.idToken}`);
+  }
+  lines.push(
     "    steps:",
     "      - name: Checkout",
     "        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2",
@@ -225,7 +247,16 @@ function renderWorkflow(model: ReturnType<typeof buildRenderModel>): string {
     "        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6",
     "        with:",
     "          node-version: 24",
+    "          registry-url: https://registry.npmjs.org/",
+    "          package-manager-cache: false",
     "",
+    ...(job.github?.permissions?.idToken === "write"
+      ? [
+          "      - name: Use current npm",
+          "        run: npm install -g npm@11.16.0",
+          ""
+        ]
+      : []),
     "      - name: Enable pnpm",
     "        run: |",
     "          corepack enable",
@@ -246,18 +277,25 @@ function renderWorkflow(model: ReturnType<typeof buildRenderModel>): string {
     "      - name: Check generated workflow",
     `        run: ${model.packageManager} async-pipeline github check`,
     "",
-    "      - name: Run matching pipeline jobs",
-    `        run: ${model.packageManager} async-pipeline github run`,
+    "      - name: Run pipeline job",
+    `        run: ${model.packageManager} async-pipeline run ${shellWord(job.id)}`,
     "        env:",
-    "          CI: true",
-    "          ASYNC_PIPELINE_GITHUB_EVENT_NAME: ${{ github.event_name }}",
-    "          ASYNC_PIPELINE_GITHUB_REF: ${{ github.ref }}",
-    "          ASYNC_PIPELINE_GITHUB_BASE_REF: ${{ github.base_ref }}",
-    "          ASYNC_PIPELINE_GITHUB_HEAD_REF: ${{ github.head_ref }}",
-    "          ASYNC_PIPELINE_GITHUB_SCHEDULE: ${{ github.event.schedule }}",
-    ""
+    "          CI: true"
   );
-  return `${lines.join("\n")}`;
+  for (const [name, value] of Object.entries(job.env).sort(([left], [right]) => left.localeCompare(right))) {
+    const rendered = renderGitHubEnvValue(value);
+    if (rendered !== undefined) {
+      lines.push(`          ${name}: ${rendered}`);
+    }
+  }
+  lines.push("");
+}
+
+function renderGitHubEnvValue(value: EnvValue): string | undefined {
+  if (typeof value === "string") return JSON.stringify(value);
+  if (value.kind === "async-pipeline.env.secret") return `\${{ secrets.${value.name} }}`;
+  if (value.kind === "async-pipeline.env.var" && !value.values) return `\${{ vars.${value.name} }}`;
+  return undefined;
 }
 
 function renderOn(lines: string[], triggers: Record<string, unknown>): void {
@@ -313,6 +351,34 @@ function triggerMatches(triggerId: string, trigger: TriggerDefinition, context: 
   return Boolean(triggerId);
 }
 
+function renderGitHubJobCondition(job: NormalizedJob, triggers: Record<TriggerId, TriggerDefinition>): string | undefined {
+  const clauses = job.trigger.flatMap((triggerId) => {
+    const trigger = triggers[triggerId];
+    if (!trigger) return [];
+    if (trigger.type === "manual") return ["github.event_name == 'workflow_dispatch'"];
+    if (trigger.type === "schedule") {
+      return trigger.cron
+        ? [`github.event_name == 'schedule' && github.event.schedule == '${escapeExpressionString(trigger.cron)}'`]
+        : ["github.event_name == 'schedule'"];
+    }
+    if (trigger.type === "github") {
+      return (trigger.events ?? []).map((event) => {
+        const filters: string[] = [`github.event_name == '${escapeExpressionString(event)}'`];
+        if (trigger.branches?.length) {
+          filters.push(`(${trigger.branches.map((branch) => `github.ref == 'refs/heads/${escapeExpressionString(branch)}'`).join(" || ")})`);
+        }
+        if (trigger.tags?.length) {
+          filters.push(`(${trigger.tags.map((tag) => `github.ref == 'refs/tags/${escapeExpressionString(tag)}'`).join(" || ")})`);
+        }
+        return filters.join(" && ");
+      });
+    }
+    return [];
+  });
+  if (clauses.length === 0) return undefined;
+  return clauses.length === 1 ? clauses[0] : clauses.map((clause) => `(${clause})`).join(" || ");
+}
+
 function branchForEvent(context: GitHubEventContext): string | undefined {
   if (context.baseRef) return context.baseRef;
   if (context.ref?.startsWith("refs/heads/")) return context.ref.slice("refs/heads/".length);
@@ -350,6 +416,18 @@ async function readPackageInfo(cwd: string): Promise<{ packageManager: string; b
 
 function sortObject(input: Record<string, unknown>): Record<string, unknown> {
   return Object.fromEntries(Object.entries(input).sort(([left], [right]) => left.localeCompare(right)));
+}
+
+function yamlKey(value: string): string {
+  return /^[A-Za-z_][A-Za-z0-9_-]*$/.test(value) ? value : JSON.stringify(value);
+}
+
+function shellWord(value: string): string {
+  return /^[A-Za-z0-9_./:-]+$/.test(value) ? value : JSON.stringify(value);
+}
+
+function escapeExpressionString(value: string): string {
+  return value.replaceAll("\\", "\\\\").replaceAll("'", "\\'");
 }
 
 function hashJson(value: unknown): string {

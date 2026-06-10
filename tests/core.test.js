@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { buildGraph, cache, composePipelines, defineCache, definePipeline, dependsOn, fileCache, job, sh, source, task, tasksForJob, trigger } from "../packages/pipeline-core/dist/index.js";
+import { buildGraph, cache, composePipelines, defineCache, definePipeline, dependsOn, env, fileCache, job, sh, source, task, tasksForJob, trigger } from "../packages/pipeline-core/dist/index.js";
 
 test("orders tasks deterministically with dependencies before dependents", () => {
   const pipeline = definePipeline({
@@ -81,6 +81,40 @@ test("normalizes cache refs and custom registries", () => {
   assert.equal(pipeline.cache.stores.custom.root, ".async/custom-cache");
   assert.equal(pipeline.tasks.build.cache.ref, "custom:cache-first");
   assert.equal(pipeline.tasks.build.cache.store, "custom");
+});
+
+test("normalizes pipeline and job env definitions", () => {
+  const pipeline = definePipeline({
+    name: "test",
+    env: {
+      NODE_ENV: env.var("NODE_ENV", { default: "dev" }),
+      API_URL: env.var("NODE_ENV", {
+        dev: "http://localhost:3000",
+        prod: "https://api.example.com"
+      }, {
+        default: "dev"
+      }),
+      LITERAL: "root"
+    },
+    tasks: {
+      build: task({ run: sh`echo build` })
+    },
+    jobs: {
+      verify: job({
+        target: "build",
+        env: {
+          LITERAL: "job",
+          NODE_AUTH_TOKEN: env.secret("NPM_TOKEN")
+        }
+      })
+    }
+  });
+
+  assert.equal(pipeline.env.NODE_ENV.kind, "async-pipeline.env.var");
+  assert.equal(pipeline.env.API_URL.kind, "async-pipeline.env.var");
+  assert.equal(pipeline.env.LITERAL, "root");
+  assert.equal(pipeline.jobs.verify.env?.LITERAL, "job");
+  assert.equal(pipeline.jobs.verify.env?.NODE_AUTH_TOKEN.kind, "async-pipeline.env.secret");
 });
 
 test("rejects unknown cache stores and strategies", () => {

@@ -3,8 +3,8 @@
   "generator": "@async/pipeline",
   "config": "pipeline.ts",
   "workflow": ".github/workflows/async-pipeline.yml",
-  "hash": "sha256:68868e3964adb331feef387afa230341e53dae4df2623269455d736b22a5cf00",
-  "generatedAt": "2026-06-10T08:47:33.741Z",
+  "hash": "sha256:d1843cecdc0ed60e7422401cec6d3eebdbf9add8720e8ce6c715e42a6665038b",
+  "generatedAt": "2026-06-10T22:15:14.401Z",
   "triggers": {
     "pull_request": {},
     "push": {
@@ -17,6 +17,29 @@
   },
   "jobs": [
     {
+      "id": "publish",
+      "target": [
+        "publish"
+      ],
+      "trigger": [
+        "manual"
+      ],
+      "env": {
+        "NODE_AUTH_TOKEN": {
+          "kind": "async-pipeline.env.secret",
+          "name": "NPM_TOKEN"
+        }
+      },
+      "github": {
+        "environment": "npm-publish",
+        "permissions": {
+          "contents": "read",
+          "idToken": "write"
+        }
+      },
+      "if": "github.event_name == 'workflow_dispatch'"
+    },
+    {
       "id": "verify",
       "target": [
         "pack"
@@ -25,7 +48,9 @@
         "pr",
         "main",
         "release"
-      ]
+      ],
+      "env": {},
+      "if": "(github.event_name == 'pull_request') || (github.event_name == 'push' && (github.ref == 'refs/heads/main')) || (github.event_name == 'release')"
     }
   ],
   "packageManager": "pnpm",

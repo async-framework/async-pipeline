@@ -1,5 +1,6 @@
-import { createHash } from "node:crypto";
-import { copyFile, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { randomBytes, createHash, type Hash } from "node:crypto";
+import { createReadStream } from "node:fs";
+import { copyFile, mkdir, open, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import type { CandidateContext, ExecutionRecord, NormalizedPipeline, NormalizedTask, TaskCacheOptions, TaskResult, TaskSourceContext, TaskStep } from "@async/pipeline-core";
 import { expandInputs } from "@async/pipeline-core";
@@ -50,17 +51,42 @@ export async function createStore(root: string): Promise<PipelineStore> {
   return { root, asyncDir, runsDir, cacheDir, sourcesDir };
 }
 
+/**
+ * Write-fsync-then-rename so readers never observe a truncated file, even if
+ * the process or machine dies mid-write. rename(2) is atomic within a
+ * filesystem, and the fsync keeps a crash from publishing an empty file.
+ */
+export async function writeFileAtomic(path: string, data: string): Promise<void> {
+  const tempPath = join(dirname(path), `.${randomBytes(6).toString("hex")}.tmp`);
+  const handle = await open(tempPath, "w");
+  try {
+    await handle.writeFile(data, "utf8");
+    await handle.sync();
+  } catch (error) {
+    await handle.close();
+    await rm(tempPath, { force: true });
+    throw error;
+  }
+  await handle.close();
+  try {
+    await rename(tempPath, path);
+  } catch (error) {
+    await rm(tempPath, { force: true });
+    throw error;
+  }
+}
+
 export async function writeExecution(store: PipelineStore, record: ExecutionRecord): Promise<void> {
   const runDir = join(store.runsDir, record.id);
   await mkdir(runDir, { recursive: true });
-  await writeFile(join(runDir, "execution.json"), `${JSON.stringify(record, null, 2)}\n`, "utf8");
-  await writeFile(join(runDir, "summary.md"), renderSummary(record), "utf8");
+  await writeFileAtomic(join(runDir, "execution.json"), `${JSON.stringify(record, null, 2)}\n`);
+  await writeFileAtomic(join(runDir, "summary.md"), renderSummary(record));
 }
 
 export async function writeTaskLog(store: PipelineStore, runId: string, taskId: string, log: string): Promise<void> {
   const logDir = join(store.runsDir, runId, "logs");
   await mkdir(logDir, { recursive: true });
-  await writeFile(join(logDir, `${safeFileName(taskId)}.log`), log, "utf8");
+  await writeFileAtomic(join(logDir, `${safeFileName(taskId)}.log`), log);
 }
 
 export async function readCacheEntry(store: PipelineStore, cacheKey: string): Promise<TaskResult | null> {
@@ -80,7 +106,7 @@ export async function writeCacheEntry(
 ): Promise<CacheOutputManifest | null> {
   const cacheEntryDir = join(store.cacheDir, cacheKey);
   await mkdir(cacheEntryDir, { recursive: true });
-  await writeFile(join(cacheEntryDir, "result.json"), `${JSON.stringify(result, null, 2)}\n`, "utf8");
+  await writeFileAtomic(join(cacheEntryDir, "result.json"), `${JSON.stringify(result, null, 2)}\n`);
   if (!outputOptions || outputOptions.outputs.length === 0) return null;
   return writeCacheOutputs(store, cacheKey, outputOptions.cwd, outputOptions.outputs);
 }
@@ -120,14 +146,21 @@ export async function computeTaskCacheKey(
 
   for (const input of inputFiles) {
     hash.update(input);
-    try {
-      hash.update(await readFile(join(cwd, input)));
-    } catch {
-      hash.update("[missing]");
-    }
+    await hashFileInto(hash, join(cwd, input));
   }
 
   return hash.digest("hex");
+}
+
+/** Stream file contents into a hash so huge inputs never load fully into memory. */
+async function hashFileInto(hash: Hash, path: string): Promise<void> {
+  try {
+    for await (const chunk of createReadStream(path)) {
+      hash.update(chunk as Buffer);
+    }
+  } catch {
+    hash.update("[missing]");
+  }
 }
 
 export async function computeCandidateContext(pipeline: NormalizedPipeline, cwd: string): Promise<CandidateContext> {
@@ -145,11 +178,7 @@ export async function computeCandidateContext(pipeline: NormalizedPipeline, cwd:
   }
   for (const input of inputFiles) {
     hash.update(input);
-    try {
-      hash.update(await readFile(join(cwd, input)));
-    } catch {
-      hash.update("[missing]");
-    }
+    await hashFileInto(hash, join(cwd, input));
   }
 
   return {
@@ -243,7 +272,9 @@ async function writeCacheOutputs(store: PipelineStore, cacheKey: string, cwd: st
     outputs: [...outputs],
     files: files.sort((left, right) => left.path.localeCompare(right.path))
   };
-  await writeFile(cacheOutputManifestPath(store, cacheKey), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+  // Manifest goes last and atomically: a reader either sees a complete
+  // manifest whose files all exist, or no manifest (treated as a miss).
+  await writeFileAtomic(cacheOutputManifestPath(store, cacheKey), `${JSON.stringify(manifest, null, 2)}\n`);
   return manifest;
 }
 
@@ -356,7 +387,11 @@ function isIgnoredPath(path: string, options: ResolvedFileOptions): boolean {
 }
 
 async function sha256File(path: string): Promise<string> {
-  return createHash("sha256").update(await readFile(path)).digest("hex");
+  const hash = createHash("sha256");
+  for await (const chunk of createReadStream(path)) {
+    hash.update(chunk as Buffer);
+  }
+  return hash.digest("hex");
 }
 
 function sameStringList(left: readonly string[], right: readonly string[]): boolean {

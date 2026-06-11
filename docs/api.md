@@ -502,7 +502,7 @@ async-pipeline gc [--keep <n>]
 
 `github check` fails when generated files are stale.
 
-`github run` reads the GitHub event context and runs matching jobs. On `workflow_dispatch` only jobs with a `manual` trigger run implicitly; select others explicitly with `--job <id>`. Pass `--concurrency <n>` to bound parallel ready-task execution. `run --format json` emits the execution record; `cache clear` resets the task cache; `gc` prunes run records, and runs auto-prune to `ASYNC_PIPELINE_KEEP_RUNS` (default 50, `0` disables).
+`github run` reads the GitHub event context and runs matching jobs. On `workflow_dispatch` only jobs with a `manual` trigger run implicitly; select others explicitly with `--job <id>`. Pass `--concurrency <n>` to bound parallel ready-task execution. `run --format json` emits the execution record; `cache clear` resets the task cache; `gc` prunes run records, and runs auto-prune to `ASYNC_PIPELINE_KEEP_RUNS` (default 50, `0` disables). In-memory task output buffers cap at `ASYNC_PIPELINE_MAX_LOG_BYTES` (default 8 MiB per stream, `0` = unlimited); stored logs keep the tail with a truncation marker.
 
 ## Runtime Subpath
 

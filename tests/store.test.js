@@ -4,7 +4,26 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { definePipeline, job, sh, task } from "../packages/pipeline-core/dist/index.js";
-import { computeTaskCacheKey, createStore, resolveInputFiles, restoreCacheOutputs, writeCacheEntry } from "../packages/pipeline-node/dist/store.js";
+import { readdir } from "node:fs/promises";
+import { computeTaskCacheKey, createStore, resolveInputFiles, restoreCacheOutputs, writeCacheEntry, writeFileAtomic } from "../packages/pipeline-node/dist/store.js";
+
+test("writeFileAtomic publishes complete files and leaves no temp files behind", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "async-pipeline-atomic-"));
+  try {
+    const target = join(dir, "execution.json");
+    await writeFileAtomic(target, "{\"status\":\"passed\"}\n");
+    assert.equal(await readFile(target, "utf8"), "{\"status\":\"passed\"}\n");
+
+    // Overwrite must replace the full content, never append or truncate partially.
+    await writeFileAtomic(target, "{\"status\":\"failed\",\"longer\":true}\n");
+    assert.equal(await readFile(target, "utf8"), "{\"status\":\"failed\",\"longer\":true}\n");
+
+    const leftovers = (await readdir(dir)).filter((name) => name.endsWith(".tmp"));
+    assert.deepEqual(leftovers, [], "temp files must not survive a successful write");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
 
 test("glob inputs are resolved deterministically and included in cache keys", async () => {
   const dir = await mkdtemp(join(tmpdir(), "async-pipeline-cache-"));

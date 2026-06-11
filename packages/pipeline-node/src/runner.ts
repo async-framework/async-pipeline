@@ -275,6 +275,8 @@ export interface RunOptions {
 export type RunSingleTaskOptions = Omit<RunOptions, "id">;
 
 export async function runJob(pipeline: NormalizedPipeline, options: RunOptions): Promise<ExecutionRecord> {
+  // Install before any task spawns so an early Ctrl-C still finalizes the record.
+  ensureSignalForwarding();
   const workspace = options.workspace ?? hostWorkspace();
   const store = await createStore(workspace.cwd);
   const plan = await createRunPlan(pipeline, workspace.cwd, store);
@@ -606,7 +608,7 @@ async function runTask(
   const started = Date.now();
   const startedAt = new Date().toISOString();
   const metadata: Record<string, string | number | boolean | null> = {};
-  let combinedLog = "";
+  const taskLog = cappedBuffer(resolveMaxLogBytes(options.workspaceEnv));
   let taskEnv: NodeJS.ProcessEnv;
   let envSecretValues: string[] = [];
   let forwardEnvKeys: string[] = [];
@@ -645,7 +647,7 @@ async function runTask(
     runId: options.runId,
     source: options.source,
     writeLog(message: string) {
-      combinedLog += `${message}\n`;
+      taskLog.append(`${message}\n`);
     }
   });
   const redactValues = [
@@ -683,7 +685,7 @@ async function runTask(
         await writeTaskLog(options.store, options.runId, taskDefinition.id, `[cache hit] ${cacheKey}\n`);
         return result;
       }
-      combinedLog += `[cache miss] ${cacheHit.reason}\n`;
+      taskLog.append(`[cache miss] ${cacheHit.reason}\n`);
     }
   }
 
@@ -716,8 +718,8 @@ async function runTask(
           throw new Error(`Deferred shell step for task "${taskDefinition.id}" was not resolved.`);
         }
         const result = await runShellStep(step, taskDefinition, { executor: options.executor, cwd: options.cwd, env: taskEnv, echo: options.echo, redactValues, forwardEnvKeys });
-        combinedLog += result.stdout;
-        combinedLog += result.stderr;
+        taskLog.append(result.stdout);
+        taskLog.append(result.stderr);
         if (result.timedOut) {
           throw new Error(`Task "${taskDefinition.id}" timed out after ${taskDefinition.timeoutMs}ms.`);
         }
@@ -738,14 +740,17 @@ async function runTask(
         cacheHit: false,
         metadata
       };
-      await writeTaskLog(options.store, options.runId, taskDefinition.id, redactLog(combinedLog));
+      await writeTaskLog(options.store, options.runId, taskDefinition.id, redactLog(taskLog.read()));
       if (taskDefinition.cache.enabled) {
         await writeTaskCacheEntry(taskDefinition, options.store, cacheKey, result, options.cwd);
       }
       return result;
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error);
-      combinedLog += `[attempt ${attempts}] ${lastError}\n`;
+      taskLog.append(`[attempt ${attempts}] ${lastError}\n`);
+      // Don't retry (or sleep through a retry delay) while shutting down;
+      // the failure is the shutdown itself, not a flaky task.
+      if (shutdownState) break;
       if (attempts < maxAttempts && taskDefinition.retry.delayMs) {
         await delay(taskDefinition.retry.delayMs);
       }
@@ -764,7 +769,7 @@ async function runTask(
     error: lastError,
     metadata
   };
-  await writeTaskLog(options.store, options.runId, taskDefinition.id, redactLog(combinedLog));
+  await writeTaskLog(options.store, options.runId, taskDefinition.id, redactLog(taskLog.read()));
   return result;
 }
 
@@ -794,7 +799,7 @@ async function runSourcePrepare(
   const startedAt = new Date().toISOString();
   const taskId = `${source.id}:prepare`;
   const sourceTaskContext = sourceContext(source);
-  let log = "";
+  const log = cappedBuffer(resolveMaxLogBytes(options.workspaceEnv));
   const prepareEnv = buildTaskEnv(options.workspaceEnv, {
     candidate: options.candidate,
     rootCwd: options.rootCwd,
@@ -809,7 +814,7 @@ async function runSourcePrepare(
     runId: options.runId,
     source: sourceTaskContext,
     writeLog(message: string) {
-      log += `${message}\n`;
+      log.append(`${message}\n`);
     }
   });
   const steps = await resolveTaskSteps(source.definition.prepare, context);
@@ -831,8 +836,8 @@ async function runSourcePrepare(
         redactValues: prepareEnv.secretValues,
         forwardEnvKeys: prepareEnv.definedKeys
       });
-      log += result.stdout;
-      log += result.stderr;
+      log.append(result.stdout);
+      log.append(result.stderr);
       if (result.code !== 0) {
         throw new Error(`Command failed with exit code ${result.code}: ${step.command}`);
       }
@@ -846,7 +851,7 @@ async function runSourcePrepare(
       attempts: 1,
       cacheHit: false
     };
-    await writeTaskLog(options.store, options.runId, taskId, log);
+    await writeTaskLog(options.store, options.runId, taskId, log.read());
     return result;
   } catch (error) {
     const result: TaskResult = {
@@ -859,8 +864,8 @@ async function runSourcePrepare(
       cacheHit: false,
       error: error instanceof Error ? error.message : String(error)
     };
-    log += `[prepare] ${result.error}\n`;
-    await writeTaskLog(options.store, options.runId, taskId, log);
+    log.append(`[prepare] ${result.error}\n`);
+    await writeTaskLog(options.store, options.runId, taskId, log.read());
     return result;
   }
 }
@@ -1106,11 +1111,115 @@ async function runFunctionStep(step: TaskRunFunction, context: TaskContext, time
   }
 }
 
+// Track live task processes so terminal signals terminate the whole run.
+// detached children live in their own process groups and would otherwise
+// survive Ctrl-C on the CLI.
+const activeKillers = new Set<(signal: NodeJS.Signals) => void>();
+const installedSignalForwarders = new Set<NodeJS.Signals>();
+let shutdownState: { signal: NodeJS.Signals; exitCode: number } | null = null;
+
+const SHUTDOWN_ESCALATE_DELAY_MS = 500;
+const SHUTDOWN_EXIT_DEADLINE_MS = 10_000;
+
+/**
+ * Abort the run: terminate every live task process group (SIGTERM-style
+ * signal first, SIGKILL after a grace period), refuse to start new task
+ * processes, and hard-exit if the run has not finalized its execution
+ * record by the deadline. Idempotent; the first caller wins.
+ */
+export function beginShutdown(signal: NodeJS.Signals, exitCode: number): void {
+  if (shutdownState) return;
+  shutdownState = { signal, exitCode };
+  for (const kill of activeKillers) kill(signal);
+  const escalate = setTimeout(() => {
+    for (const kill of activeKillers) kill("SIGKILL");
+  }, SHUTDOWN_ESCALATE_DELAY_MS);
+  escalate.unref();
+  const deadline = setTimeout(() => process.exit(exitCode), SHUTDOWN_EXIT_DEADLINE_MS);
+  deadline.unref();
+}
+
+/** Exit code requested by an in-progress shutdown, if any. */
+export function shutdownExitCode(): number | null {
+  return shutdownState ? shutdownState.exitCode : null;
+}
+
+function ensureSignalForwarding(): void {
+  for (const signal of ["SIGINT", "SIGTERM"] as const) {
+    if (installedSignalForwarders.has(signal)) continue;
+    installedSignalForwarders.add(signal);
+    process.once(signal, () => {
+      // 128 + signal number, the conventional interrupted-exit status.
+      const exitCode = signal === "SIGINT" ? 130 : 143;
+      beginShutdown(signal, exitCode);
+      process.exitCode = exitCode;
+      // Stay alive so the dead tasks surface as failures and the execution
+      // record is finalized instead of being left "running". A second
+      // signal or the shutdown deadline exits immediately.
+      process.once(signal, () => process.exit(exitCode));
+    });
+  }
+}
+
+const DEFAULT_MAX_LOG_BYTES = 8 * 1024 * 1024;
+
+function resolveMaxLogBytes(env: NodeJS.ProcessEnv): number {
+  const raw = env.ASYNC_PIPELINE_MAX_LOG_BYTES ?? process.env.ASYNC_PIPELINE_MAX_LOG_BYTES;
+  if (raw === undefined || raw === "") return DEFAULT_MAX_LOG_BYTES;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) return DEFAULT_MAX_LOG_BYTES;
+  return parsed === 0 ? Number.POSITIVE_INFINITY : Math.max(parsed, 4096);
+}
+
+interface CappedBuffer {
+  append(chunk: string): void;
+  read(): string;
+}
+
+/** Keeps the byte-accurate tail of a stream bounded so huge task output cannot exhaust memory. */
+function cappedBuffer(maxBytes: number): CappedBuffer {
+  const chunks: Buffer[] = [];
+  let byteLength = 0;
+  let dropped = 0;
+  return {
+    append(chunk: string): void {
+      const buffer = Buffer.from(chunk, "utf8");
+      chunks.push(buffer);
+      byteLength += buffer.byteLength;
+      while (byteLength > maxBytes) {
+        const head = chunks[0];
+        if (!head) break;
+        const excess = byteLength - maxBytes;
+        if (head.byteLength <= excess) {
+          chunks.shift();
+          byteLength -= head.byteLength;
+          dropped += head.byteLength;
+        } else {
+          chunks[0] = head.subarray(excess);
+          byteLength -= excess;
+          dropped += excess;
+        }
+      }
+    },
+    read(): string {
+      const text = Buffer.concat(chunks).toString("utf8");
+      if (dropped === 0) return text;
+      return `[async-pipeline] output truncated: dropped ${dropped} leading bytes (ASYNC_PIPELINE_MAX_LOG_BYTES).\n${text}`;
+    }
+  };
+}
+
 function runProcess(
   command: string,
   options: { cwd: string; env: NodeJS.ProcessEnv; echo?: boolean; timeoutMs?: number; label?: string; redactValues?: readonly string[] }
 ): Promise<CommandResult> {
   return new Promise((resolve) => {
+    if (shutdownState) {
+      // The run is shutting down (signal or closed output pipe): fail fast
+      // instead of spawning processes that would immediately be killed.
+      resolve({ code: 1, stdout: "", stderr: `[interrupted] Run is shutting down (${shutdownState.signal}); not starting: ${options.label ?? command}\n` });
+      return;
+    }
     // detached puts the shell in its own process group on POSIX so a timeout
     // can terminate the whole tree, not only the wrapping shell.
     const detached = process.platform !== "win32";
@@ -1121,8 +1230,9 @@ function runProcess(
       detached,
       stdio: ["ignore", "pipe", "pipe"]
     });
-    let stdout = "";
-    let stderr = "";
+    const maxLogBytes = resolveMaxLogBytes(options.env);
+    const stdout = cappedBuffer(maxLogBytes);
+    const stderr = cappedBuffer(maxLogBytes);
     let timedOut = false;
     let timeout: NodeJS.Timeout | undefined;
     let forceKillTimeout: NodeJS.Timeout | undefined;
@@ -1140,6 +1250,8 @@ function runProcess(
       }
       child.kill(signal);
     };
+    activeKillers.add(killTree);
+    ensureSignalForwarding();
 
     if (options.timeoutMs) {
       timeout = setTimeout(() => {
@@ -1152,28 +1264,29 @@ function runProcess(
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => {
-      stdout += chunk;
+      stdout.append(chunk);
       if (options.echo !== false) echoStdout.write(chunk);
     });
     child.stderr.on("data", (chunk: string) => {
-      stderr += chunk;
+      stderr.append(chunk);
       if (options.echo !== false) echoStderr.write(chunk);
     });
     child.on("close", (code) => {
+      activeKillers.delete(killTree);
       if (timeout) clearTimeout(timeout);
       if (forceKillTimeout) clearTimeout(forceKillTimeout);
       if (options.echo !== false) {
         echoStdout.flush();
         echoStderr.flush();
       }
-      stdout = redactKnownValues(stdout, redactValues);
-      stderr = redactKnownValues(stderr, redactValues);
+      const finalStdout = redactKnownValues(stdout.read(), redactValues);
+      const finalStderr = redactKnownValues(stderr.read(), redactValues);
       if (timedOut) {
         const timeoutMessage = `[timeout] Command timed out after ${options.timeoutMs}ms.\n`;
-        resolve({ code: 124, stdout, stderr: `${stderr}${timeoutMessage}`, timedOut: true });
+        resolve({ code: 124, stdout: finalStdout, stderr: `${finalStderr}${timeoutMessage}`, timedOut: true });
         return;
       }
-      resolve({ code: code ?? 1, stdout, stderr });
+      resolve({ code: code ?? 1, stdout: finalStdout, stderr: finalStderr });
     });
   });
 }

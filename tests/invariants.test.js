@@ -3,7 +3,7 @@
 // implementation, never the assertion.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -145,6 +145,129 @@ test("PROMISE: the CLI streams the plan before task output and prefixes task lin
     assert.ok(doneIndex >= 0, `missing completion line in: ${result.stdout}`);
     assert.ok(planIndex < taskIndex, "plan line must stream before task output");
     assert.ok(taskIndex < doneIndex, "task output must stream before the completion line");
+  } finally {
+    await rm(dir, { force: true, recursive: true });
+  }
+});
+
+test("PROMISE: interrupting the CLI terminates running task processes", { skip: process.platform === "win32" }, async () => {
+  // Stability: Ctrl-C on a run must not orphan task process groups, must
+  // finalize the execution record, and must exit 130 (128 + SIGINT).
+  const { spawn } = await import("node:child_process");
+  const { setTimeout: delay } = await import("node:timers/promises");
+  const dir = await mkdtemp(join(tmpdir(), "async-pipeline-invariant-signal-"));
+  try {
+    await writeFile(join(dir, "pipeline.mjs"), [
+      `import { definePipeline, job, sh, task } from ${JSON.stringify(coreUrl)};`,
+      "export default definePipeline({",
+      '  name: "signal",',
+      "  tasks: { hang: task({ cache: false, run: sh`node -e \"console.log('CHILD='+process.pid); setInterval(()=>{},1000)\"` }) },",
+      '  jobs: { hang: job({ target: "hang" }) }',
+      "});",
+      ""
+    ].join("\n"), "utf8");
+
+    const cli = spawn("node", [cliPath, "run", "hang"], { cwd: dir, stdio: ["ignore", "pipe", "pipe"] });
+    const closed = new Promise((resolve) => cli.on("close", (code) => resolve(code)));
+    cli.stderr.resume();
+    let output = "";
+    cli.stdout.setEncoding("utf8");
+    cli.stdout.on("data", (chunk) => { output += chunk; });
+
+    let childPid;
+    for (let attempt = 0; attempt < 100 && !childPid; attempt += 1) {
+      const match = /CHILD=(\d+)/.exec(output);
+      if (match) childPid = Number(match[1]);
+      else await delay(50);
+    }
+    assert.ok(childPid, `task process never reported its pid: ${output}`);
+
+    cli.kill("SIGINT");
+    let childAlive = true;
+    for (let attempt = 0; attempt < 100 && childAlive; attempt += 1) {
+      try {
+        process.kill(childPid, 0);
+        await delay(50);
+      } catch {
+        childAlive = false;
+      }
+    }
+    if (childAlive) {
+      try { process.kill(childPid, "SIGKILL"); } catch {}
+    }
+    assert.equal(childAlive, false, "task process must terminate when the CLI receives SIGINT");
+
+    const exitCode = await Promise.race([closed, delay(15000).then(() => null)]);
+    if (exitCode === null) { try { cli.kill("SIGKILL"); } catch {} }
+    assert.equal(exitCode, 130, "CLI must exit 130 after SIGINT");
+
+    const runs = await readdir(join(dir, ".async", "runs"));
+    assert.equal(runs.length >= 1, true, "an execution record directory must exist");
+    const record = JSON.parse(await readFile(join(dir, ".async", "runs", runs[0], "execution.json"), "utf8"));
+    assert.notEqual(record.status, "running", "interrupt must finalize the execution record");
+  } finally {
+    await rm(dir, { force: true, recursive: true });
+  }
+});
+
+test("PROMISE: a closed output pipe terminates tasks and finalizes the run", { skip: process.platform === "win32" }, async () => {
+  // Stability: `async-pipeline run x | head` must not crash, orphan task
+  // processes, or leave the execution record "running"; it exits 141
+  // (128 + SIGPIPE).
+  const { spawn } = await import("node:child_process");
+  const { setTimeout: delay } = await import("node:timers/promises");
+  const dir = await mkdtemp(join(tmpdir(), "async-pipeline-invariant-epipe-"));
+  try {
+    await writeFile(join(dir, "pipeline.mjs"), [
+      `import { definePipeline, job, sh, task } from ${JSON.stringify(coreUrl)};`,
+      "export default definePipeline({",
+      '  name: "epipe",',
+      "  tasks: { chatty: task({ cache: false, run: sh`node -e \"console.log('CHILD='+process.pid); setInterval(()=>console.log('tick'),25)\"` }) },",
+      '  jobs: { chatty: job({ target: "chatty" }) }',
+      "});",
+      ""
+    ].join("\n"), "utf8");
+
+    const cli = spawn("node", [cliPath, "run", "chatty"], { cwd: dir, stdio: ["ignore", "pipe", "pipe"] });
+    const closed = new Promise((resolve) => cli.on("close", (code) => resolve(code)));
+    cli.stderr.resume();
+    let output = "";
+    cli.stdout.setEncoding("utf8");
+    cli.stdout.on("data", (chunk) => { output += chunk; });
+
+    let childPid;
+    for (let attempt = 0; attempt < 100 && !childPid; attempt += 1) {
+      const match = /CHILD=(\d+)/.exec(output);
+      if (match) childPid = Number(match[1]);
+      else await delay(50);
+    }
+    assert.ok(childPid, `task process never reported its pid: ${output}`);
+
+    // Simulate `| head` exiting: close the read end of the CLI's stdout.
+    cli.stdout.destroy();
+
+    const exitCode = await Promise.race([closed, delay(15000).then(() => null)]);
+    let childAlive = true;
+    for (let attempt = 0; attempt < 100 && childAlive; attempt += 1) {
+      try {
+        process.kill(childPid, 0);
+        await delay(50);
+      } catch {
+        childAlive = false;
+      }
+    }
+    if (childAlive) {
+      try { process.kill(childPid, "SIGKILL"); } catch {}
+    }
+    if (exitCode === null) { try { cli.kill("SIGKILL"); } catch {} }
+
+    assert.equal(childAlive, false, "task process must terminate when the output pipe closes");
+    assert.equal(exitCode, 141, "CLI must exit 141 when its output pipe closes");
+
+    const runs = await readdir(join(dir, ".async", "runs"));
+    assert.equal(runs.length >= 1, true, "an execution record directory must exist");
+    const record = JSON.parse(await readFile(join(dir, ".async", "runs", runs[0], "execution.json"), "utf8"));
+    assert.notEqual(record.status, "running", "EPIPE shutdown must finalize the execution record");
   } finally {
     await rm(dir, { force: true, recursive: true });
   }

@@ -442,3 +442,12 @@ test("detects missing tasks when loaded source metadata is composed", () => {
 
   assert.throws(() => composePipelines(root, { app: { pipeline: app } }), /missing task "app:missing"/);
 });
+
+test("named input cycles fail fast at definePipeline time", () => {
+  assert.throws(() => definePipeline({
+    name: "cycle",
+    namedInputs: { a: ["b"], b: ["a"] },
+    tasks: { t: task({ inputs: ["a"], cache: false, run: sh`true` }) },
+    jobs: { j: job({ target: "t" }) }
+  }), /ASYNC_PIPELINE_INPUT_CYCLE|Named input cycle/);
+});

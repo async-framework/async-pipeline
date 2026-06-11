@@ -734,6 +734,12 @@ export function validatePipeline(pipeline: NormalizedPipeline): void {
 
   validateSyncConfig(pipeline);
 
+  // Fail fast on named-input cycles at definePipeline time instead of
+  // overflowing the stack when inputs are first resolved.
+  for (const taskDefinition of Object.values(pipeline.tasks)) {
+    expandInputs(pipeline, taskDefinition.inputs);
+  }
+
   buildGraph(pipeline);
 }
 
@@ -866,10 +872,22 @@ export function tasksForJob(pipeline: NormalizedPipeline, jobId: JobId): Pipelin
 }
 
 export function expandInputs(pipeline: NormalizedPipeline, inputs: string[]): string[] {
+  return expandInputsInternal(pipeline, inputs, new Set());
+}
+
+function expandInputsInternal(pipeline: NormalizedPipeline, inputs: string[], expanding: Set<string>): string[] {
   const expanded: string[] = [];
   for (const input of inputs) {
     if (pipeline.namedInputs[input]) {
-      expanded.push(...expandInputs(pipeline, pipeline.namedInputs[input]));
+      if (expanding.has(input)) {
+        throw pipelineError(
+          "ASYNC_PIPELINE_INPUT_CYCLE",
+          `Named input cycle detected: "${[...expanding, input].join('" -> "')}".`
+        );
+      }
+      expanding.add(input);
+      expanded.push(...expandInputsInternal(pipeline, pipeline.namedInputs[input], expanding));
+      expanding.delete(input);
     } else {
       expanded.push(input);
     }

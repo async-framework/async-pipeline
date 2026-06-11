@@ -7,7 +7,7 @@ import { buildGraph, composePipelines, tasksForJob, type NormalizedPipeline, typ
 import { runDoctor } from "./doctor.js";
 import { checkGitHubWorkflow, jobsForGitHubEvent, readGitHubEventContext, renderGitHubWorkflow, writeGitHubWorkflow } from "./github.js";
 import { loadPipeline } from "./loader.js";
-import { commandProxy, dockerWorkspace, hostWorkspace, limaWorkspace, planJob, runJob, runSingleTask, type CommandResult, type PipelineWorkspace } from "./runner.js";
+import { beginShutdown, commandProxy, dockerWorkspace, hostWorkspace, limaWorkspace, planJob, runJob, runSingleTask, shutdownExitCode, type CommandResult, type PipelineWorkspace } from "./runner.js";
 import { createStore } from "./store.js";
 import { matrixForJob, readPipelineMetadata, resolveSources, sourceContext } from "./sources.js";
 import { checkTaskSync, describeTaskSync, renderTaskSync, writeTaskSync } from "./sync.js";
@@ -722,10 +722,24 @@ function virtualStore(root: string): Awaited<ReturnType<typeof createStore>> {
 }
 
 if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
+  // When the downstream pipe closes (e.g. `async-pipeline run x | head`),
+  // terminate running task process groups, let the run finalize its
+  // execution record, and exit 141 (128 + SIGPIPE) instead of crashing
+  // with an unhandled EPIPE or orphaning task processes.
+  const shutdownOnEpipe = (error: NodeJS.ErrnoException): void => {
+    if (error.code === "EPIPE") {
+      beginShutdown("SIGTERM", 141);
+      return;
+    }
+    throw error;
+  };
+  process.stdout.on("error", shutdownOnEpipe);
+  process.stderr.on("error", shutdownOnEpipe);
+
   runPipelineCli({ args: process.argv.slice(2) }).then((result) => {
-    process.exitCode = result.code;
+    process.exitCode = shutdownExitCode() ?? result.code;
   }).catch((error: unknown) => {
     console.error(error instanceof Error ? error.message : String(error));
-    process.exitCode = 1;
+    process.exitCode = shutdownExitCode() ?? 1;
   });
 }

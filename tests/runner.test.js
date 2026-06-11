@@ -777,3 +777,34 @@ test("docker commands forward only allowlisted env keys", async () => {
   assert.doesNotMatch(rendered, /HOST_SECRET_TOKEN/);
   assert.doesNotMatch(rendered, /MISSING_KEY/);
 });
+
+test("task logs are capped by ASYNC_PIPELINE_MAX_LOG_BYTES with a truncation marker", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "async-pipeline-logcap-"));
+  try {
+    const pipeline = definePipeline({
+      name: "logcap-test",
+      tasks: {
+        noisy: task({
+          cache: false,
+          run: sh`node -e "process.stdout.write('x'.repeat(64 * 1024))"`
+        })
+      },
+      jobs: { noisy: job({ target: "noisy" }) }
+    });
+
+    const record = await runJob(pipeline, {
+      id: "noisy",
+      workspace: hostWorkspace({
+        cwd: dir,
+        env: { PATH: process.env.PATH, ASYNC_PIPELINE_MAX_LOG_BYTES: "4096" }
+      })
+    });
+
+    assert.equal(record.status, "passed");
+    const log = await readFile(join(dir, ".async", "runs", record.id, "logs", "noisy.log"), "utf8");
+    assert.ok(log.length < 16 * 1024, `log should be capped, saw ${log.length} chars`);
+    assert.match(log, /output truncated: dropped \d+ leading bytes/);
+  } finally {
+    await rm(dir, { force: true, recursive: true });
+  }
+});

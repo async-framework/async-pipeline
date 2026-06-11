@@ -111,8 +111,35 @@ export default definePipeline({
       cache: false,
       run: [sh`pnpm exports:check`, sh`pnpm pack:check`]
     }),
-    publish: task({
+    // GitHub Packages publishing, adapted from PatrickJS's GitHub-native npm
+    // preview packages gist (see examples/github-native-npm-preview-package).
+    // The mirror is @async-framework/pipeline: GitHub Packages requires the
+    // scope to match the repo owner.
+    preview: task({
+      description: "Same-repo PRs publish an immutable 0.0.0-pr.<n>.sha.<sha> preview to GitHub Packages, move the pr-<n> dist-tag, and upsert one install-instructions comment. Fork PRs skip.",
       dependsOn: ["pack"],
+      inputs: ["production", "package.json", "packages/*/package.json", "scripts/publish-github.mjs"],
+      cache: false,
+      run: sh`node scripts/publish-github.mjs pr`
+    }),
+    snapshot: task({
+      description: "Pushes to main publish an immutable 0.0.0-main.sha.<sha> snapshot to GitHub Packages and move the main dist-tag while the commit is still the branch head.",
+      dependsOn: ["pack"],
+      inputs: ["production", "package.json", "packages/*/package.json", "scripts/publish-github.mjs"],
+      cache: false,
+      run: sh`node scripts/publish-github.mjs main`
+    }),
+    "publish-github": task({
+      description: "Stable mirror to GitHub Packages (latest tag). Runs before the npm publish so a stable version always exists on GitHub Packages even when npm has an issue.",
+      dependsOn: ["pack"],
+      inputs: ["production", "package.json", "packages/*/package.json", "scripts/publish-github.mjs"],
+      cache: false,
+      run: sh`node scripts/publish-github.mjs release`
+    }),
+    publish: task({
+      // GitHub Packages first, then npm: the fallback registry is never
+      // behind the primary one.
+      dependsOn: ["publish-github"],
       inputs: ["production", "package.json", "packages/*/package.json", "scripts/publish.mjs"],
       cache: false,
       run: sh`node scripts/publish.mjs`
@@ -128,6 +155,34 @@ export default definePipeline({
         runsOnMatrix: ["ubuntu-latest", "macos-latest"]
       }
     }),
+    preview: job({
+      target: "preview",
+      trigger: ["pr"],
+      env: {
+        GITHUB_TOKEN: env.secret("GITHUB_TOKEN")
+      },
+      github: {
+        permissions: {
+          // Commenting on a PR through the issues API routes through the
+          // pull-requests permission for GITHUB_TOKEN, so both are write.
+          issues: "write",
+          packages: "write",
+          pullRequests: "write"
+        }
+      }
+    }),
+    snapshot: job({
+      target: "snapshot",
+      trigger: ["main"],
+      env: {
+        GITHUB_TOKEN: env.secret("GITHUB_TOKEN")
+      },
+      github: {
+        permissions: {
+          packages: "write"
+        }
+      }
+    }),
     publish: job({
       target: "publish",
       trigger: ["manual"],
@@ -139,7 +194,13 @@ export default definePipeline({
         provenance: true
       },
       env: {
-        NODE_AUTH_TOKEN: env.secret("NPM_TOKEN")
+        NODE_AUTH_TOKEN: env.secret("NPM_TOKEN"),
+        GITHUB_TOKEN: env.secret("GITHUB_TOKEN")
+      },
+      github: {
+        permissions: {
+          packages: "write"
+        }
       }
     })
   }

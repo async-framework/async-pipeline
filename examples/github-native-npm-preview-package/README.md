@@ -10,6 +10,8 @@ The Gist uses separate GitHub Actions workflow templates for:
 
 This example keeps the same model but makes `pipeline.mjs` the source of truth for jobs, triggers, local verification, and generated command sync.
 
+The repo dogfoods this model for real: the root `pipeline.ts` publishes `@async/pipeline` previews, `main` snapshots, and a stable mirror to GitHub Packages through `scripts/publish-github.mjs`. This example stays print-only so it is safe to run anywhere.
+
 ## Files
 
 ```txt

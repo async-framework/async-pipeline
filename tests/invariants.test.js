@@ -330,3 +330,34 @@ test("PROMISE: a closed output pipe terminates tasks and finalizes the run", { s
     await rm(dir, { force: true, recursive: true });
   }
 });
+
+test("PROMISE: the release chain publishes GitHub Packages before npm, and previews/snapshots are wired to their triggers", async () => {
+  // README: "Stable releases publish to GitHub Packages as `@async-framework/pipeline`
+  // before npm". The wiring lives in pipeline.ts; this pins it so the fallback
+  // registry can never silently fall behind the primary one.
+  const { default: pipeline } = await import("../pipeline.ts");
+
+  assert.deepEqual(
+    pipeline.tasks["publish"].dependsOn,
+    ["publish-github"],
+    "the npm publish task must depend on the GitHub Packages mirror task"
+  );
+  assert.equal(pipeline.tasks["publish-github"].run.command, "node scripts/publish-github.mjs release");
+  assert.equal(pipeline.tasks["snapshot"].run.command, "node scripts/publish-github.mjs main");
+  assert.equal(pipeline.tasks["preview"].run.command, "node scripts/publish-github.mjs pr");
+
+  assert.deepEqual(pipeline.jobs["preview"].trigger, ["pr"]);
+  assert.deepEqual(pipeline.jobs["snapshot"].trigger, ["main"]);
+  assert.deepEqual(pipeline.jobs["publish"].trigger, ["manual"]);
+
+  // Publishing jobs must hold packages:write or GitHub Packages rejects them.
+  assert.equal(pipeline.jobs["preview"].github.permissions.packages, "write");
+  assert.equal(pipeline.jobs["preview"].github.permissions.issues, "write", "the preview job comments install commands on the PR");
+  assert.equal(
+    pipeline.jobs["preview"].github.permissions.pullRequests,
+    "write",
+    "GITHUB_TOKEN routes PR comments through the pull-requests permission, not just issues"
+  );
+  assert.equal(pipeline.jobs["snapshot"].github.permissions.packages, "write");
+  assert.equal(pipeline.jobs["publish"].github.permissions.packages, "write");
+});

@@ -341,6 +341,12 @@ How it works:
 
 `@async/pipeline` does not infer reverse dependencies from package manifests, lockfiles, npm metadata, or GitHub search. The dependency map stays explicit and reviewable.
 
+Pin `ref` to a commit SHA for reproducible impact runs. A branch name like `"main"` is convenient while iterating, but it moves underneath you: two runs of the same pipeline can test different dependent code.
+
+## Platform Support
+
+The checked-in workflow targets Node `>= 24` on Linux (`ubuntu-latest`) and on a self-hosted Apple Silicon macOS runner labeled `self-hosted`, `macos`, and `tart`; see [GitHub Actions setup](docs/github-actions.md). Windows is untested; use WSL.
+
 ## Use It When
 
 - You want local verification to be the source of truth.
@@ -377,6 +383,7 @@ Only `@async/pipeline` is published to npm. The other workspace packages are pri
 - [GitHub Actions setup](docs/github-actions.md)
 - [API reference](docs/api.md)
 - [Many-repo impact runs](docs/many-repo-impact-runs.md)
+- [Path to 1.0](docs/path-to-1.0.md)
 
 ## Runtime Primitives
 

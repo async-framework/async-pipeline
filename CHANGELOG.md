@@ -54,6 +54,8 @@
 
 - License the repository and the published `@async/pipeline` package under MIT.
 - Verify packaging before pack/publish: `scripts/check-exports.mjs` (wired into `release:check` and the self pipeline's `pack` task) fails when exports, bin, types, license, or files targets are missing from the built package.
+- Run the self pipeline's `verify` job on a runner matrix: GitHub-hosted `ubuntu-latest` plus a self-hosted Apple Silicon runner labeled `self-hosted, macos, tart` backed by Tart VMs (setup guide in docs/github-actions.md).
+- Document the exit-code contract, environment variables, run lock, execution record schema, platform support, source SHA pinning, and the path to 1.0.
 
 ## 0.1.5 - 2026-06-10
 

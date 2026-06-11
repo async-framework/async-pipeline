@@ -102,6 +102,12 @@
       ]
     },
     {
+      "id": "readme.platform-workflow",
+      "source": "README.md",
+      "anchor": "The checked-in workflow targets Node `>= 24` on Linux (`ubuntu-latest`) and on a self-hosted Apple Silicon macOS runner labeled `self-hosted`, `macos`, and `tart`",
+      "tests": ["renders github job runner labels and runner matrices"]
+    },
+    {
       "id": "github.runner-selection",
       "source": "docs/github-actions.md",
       "anchor": "Use `job({ github: { runsOn } })` to select a hosted runner or self-hosted label set, and `job({ github: { runsOnMatrix } })` to fan a job out across multiple runner label sets",

@@ -165,3 +165,19 @@ test("file cache entries snapshot and restore declared outputs", async () => {
     await rm(dir, { force: true, recursive: true });
   }
 });
+
+test("default pruning skips .git, .async, and node_modules at any depth", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "async-pipeline-prune-"));
+  try {
+    await mkdir(join(dir, "pkg", "src"), { recursive: true });
+    await mkdir(join(dir, "pkg", "node_modules", "dep"), { recursive: true });
+    await mkdir(join(dir, "pkg", ".git"), { recursive: true });
+    await writeFile(join(dir, "pkg", "src", "a.ts"), "export {};\n", "utf8");
+    await writeFile(join(dir, "pkg", "node_modules", "dep", "d.ts"), "export {};\n", "utf8");
+    await writeFile(join(dir, "pkg", ".git", "x.ts"), "export {};\n", "utf8");
+
+    assert.deepEqual(await resolveInputFiles(dir, ["pkg/**/*.ts"]), ["pkg/src/a.ts"]);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

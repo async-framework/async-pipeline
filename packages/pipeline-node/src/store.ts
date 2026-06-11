@@ -346,12 +346,13 @@ function expandExcludePattern(pattern: string): string[] {
   return [normalized, `${normalized}/**`];
 }
 
+const PRUNED_DIR_NAMES = new Set([".git", ".async", "node_modules"]);
+
 function isIgnoredPath(path: string, options: ResolvedFileOptions): boolean {
   if (options.pruneDefaultDirs === false) return false;
   const normalized = normalizePath(path);
   if (!normalized || normalized === ".") return false;
-  const first = normalized.split("/")[0];
-  return first === ".git" || first === ".async" || first === "node_modules";
+  return normalized.split("/").some((segment) => PRUNED_DIR_NAMES.has(segment));
 }
 
 async function sha256File(path: string): Promise<string> {

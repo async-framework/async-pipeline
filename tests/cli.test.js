@@ -41,7 +41,7 @@ test("pipeline explain emits task details", () => {
 
   assert.equal(result.status, 0, result.stderr);
   const explained = JSON.parse(result.stdout);
-  assert.deepEqual(explained.dependsOn, ["test"]);
+  assert.deepEqual(explained.dependsOn, ["test", "drift"]);
 });
 
 test("runPipelineCli exposes CLI behavior without spawning a subprocess", async () => {
@@ -169,5 +169,123 @@ export default definePipeline({
     assert.equal(stdout, "mock docker run\n");
   } finally {
     rmSync(dir, { force: true, recursive: true });
+  }
+});
+
+test("cache clear and gc maintain local pipeline state", async () => {
+  const { mkdtemp, mkdir, writeFile, readdir, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { hostWorkspace } = await import("../packages/pipeline-node/dist/runner.js");
+  const { runPipelineCli } = await import("../packages/pipeline-node/dist/cli.js");
+
+  const dir = await mkdtemp(join(tmpdir(), "async-pipeline-cli-gc-"));
+  try {
+    // Minimal valid pipeline config for CLI maintenance commands.
+    await writeFile(join(dir, "pipeline.mjs"), [
+      `import { definePipeline, job, sh, task } from ${JSON.stringify(new URL("../packages/pipeline-core/dist/index.js", import.meta.url).href)};`,
+      "export default definePipeline({",
+      '  name: "gc-test",',
+      "  tasks: { noop: task({ cache: false, run: sh`node -e \"process.exit(0)\"` }) },",
+      "  jobs: { noop: job({ target: \"noop\" }) }",
+      "});",
+      ""
+    ].join("\n"), "utf8");
+
+    await mkdir(join(dir, ".async", "cache", "tasks", "deadbeef"), { recursive: true });
+    for (const runId of ["2026-01-01T00-00-00-000Z-aaaaaaaa", "2026-01-02T00-00-00-000Z-bbbbbbbb", "2026-01-03T00-00-00-000Z-cccccccc"]) {
+      await mkdir(join(dir, ".async", "runs", runId), { recursive: true });
+    }
+    const workspace = hostWorkspace({ cwd: dir, env: { PATH: process.env.PATH } });
+
+    let stdout = "";
+    const clear = await runPipelineCli({ args: ["cache", "clear"], workspace, stdout: (t) => { stdout += t; }, stderr: () => {} });
+    assert.equal(clear.code, 0, stdout);
+    assert.match(stdout, /Cleared task cache/);
+    assert.deepEqual(await readdir(join(dir, ".async", "cache")).catch(() => []), []);
+
+    stdout = "";
+    const gc = await runPipelineCli({ args: ["gc", "--keep", "1"], workspace, stdout: (t) => { stdout += t; }, stderr: () => {} });
+    assert.equal(gc.code, 0, stdout);
+    assert.match(stdout, /Removed 2 run records; kept 1/);
+    assert.deepEqual(await readdir(join(dir, ".async", "runs")), ["2026-01-03T00-00-00-000Z-cccccccc"]);
+  } finally {
+    await rm(dir, { force: true, recursive: true });
+  }
+});
+
+test("run auto-prunes records, emits json, and finds config from subdirectories", async () => {
+  const { mkdtemp, mkdir, writeFile, readdir, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { hostWorkspace } = await import("../packages/pipeline-node/dist/runner.js");
+  const { runPipelineCli } = await import("../packages/pipeline-node/dist/cli.js");
+
+  const dir = await mkdtemp(join(tmpdir(), "async-pipeline-cli-polish-"));
+  try {
+    await writeFile(join(dir, "pipeline.mjs"), [
+      `import { definePipeline, job, sh, task } from ${JSON.stringify(new URL("../packages/pipeline-core/dist/index.js", import.meta.url).href)};`,
+      "export default definePipeline({",
+      '  name: "polish-test",',
+      "  tasks: { noop: task({ cache: false, run: sh`node -e \"process.exit(0)\"` }) },",
+      '  jobs: { noop: job({ target: "noop" }) }',
+      "});",
+      ""
+    ].join("\n"), "utf8");
+    await mkdir(join(dir, "nested", "deeper"), { recursive: true });
+
+    // Config walk-up: run from a nested cwd, json output, keep only 1 run.
+    const env = { PATH: process.env.PATH, ASYNC_PIPELINE_KEEP_RUNS: "1" };
+    let stdout = "";
+    const first = await runPipelineCli({
+      args: ["run", "noop", "--format", "json"],
+      workspace: hostWorkspace({ cwd: join(dir, "nested", "deeper"), env }),
+      stdout: (t) => { stdout += t; },
+      stderr: () => {}
+    });
+    assert.equal(first.code, 0, first.stderr);
+    const record = JSON.parse(stdout);
+    assert.equal(record.status, "passed");
+    assert.equal(record.tasks[0]?.id, "noop");
+
+    const second = await runPipelineCli({
+      args: ["run", "noop"],
+      workspace: hostWorkspace({ cwd: join(dir, "nested", "deeper"), env }),
+      stdout: () => {},
+      stderr: () => {}
+    });
+    assert.equal(second.code, 0);
+    const runs = await readdir(join(dir, ".async", "runs"));
+    assert.equal(runs.length, 1, `auto-prune should keep exactly 1 run, saw: ${runs.join(", ")}`);
+  } finally {
+    await rm(dir, { force: true, recursive: true });
+  }
+});
+
+test("run --format json suppresses live task output on stdout", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "async-pipeline-cli-json-"));
+  try {
+    writeFileSync(join(dir, "pipeline.mjs"), [
+      `import { definePipeline, job, sh, task } from ${JSON.stringify(packageUrl)};`,
+      "export default definePipeline({",
+      '  name: "json-output-test",',
+      "  tasks: { noisy: task({ cache: false, run: sh`printf \"task-noise\\n\"` }) },",
+      '  jobs: { noisy: job({ target: "noisy" }) }',
+      "});",
+      ""
+    ].join("\n"));
+
+    const result = spawnSync("node", [join(repoRoot.pathname, "packages/pipeline-node/dist/cli.js"), "run", "noisy", "--format", "json"], {
+      cwd: dir,
+      encoding: "utf8"
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.doesNotMatch(result.stdout, /task-noise/);
+    const record = JSON.parse(result.stdout);
+    assert.equal(record.status, "passed");
+    assert.equal(record.tasks[0]?.id, "noisy");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });

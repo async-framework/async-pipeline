@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { test } from "node:test";
 import { command, definePipeline, env, job, sh, task } from "../packages/pipeline-core/dist/index.js";
-import { commandProxy, hostWorkspace, runJob, runSingleTask } from "../packages/pipeline-node/dist/runner.js";
+import { commandProxy, hostWorkspace, planJob, runJob, runSingleTask } from "../packages/pipeline-node/dist/runner.js";
 
 test("commandProxy mocks matching commands and records bounded redacted output", async () => {
   const commands = commandProxy(command.policy({
@@ -604,4 +604,176 @@ test("memory cache only honors output task hits while outputs still exist", asyn
   } finally {
     await rm(dir, { force: true, recursive: true });
   }
+});
+
+test("resolved secret values are redacted from stored task logs", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "async-pipeline-redact-"));
+  try {
+    const pipeline = definePipeline({
+      name: "redact-test",
+      tasks: {
+        leak: task({
+          cache: false,
+          run: sh`node -e "console.log('value: ' + process.env.LEAKED_DESTINATION)"`
+        })
+      },
+      jobs: {
+        leak: job({
+          target: "leak",
+          env: {
+            LEAKED_DESTINATION: env.secret("ASYNC_PIPELINE_REDACT_SECRET")
+          }
+        })
+      }
+    });
+
+    const record = await runJob(pipeline, {
+      id: "leak",
+      workspace: hostWorkspace({
+        cwd: dir,
+        env: { PATH: process.env.PATH, ASYNC_PIPELINE_REDACT_SECRET: "super-secret-value" }
+      })
+    });
+
+    assert.equal(record.status, "passed");
+    const log = await readFile(join(dir, ".async", "runs", record.id, "logs", "leak.log"), "utf8");
+    assert.doesNotMatch(log, /super-secret-value/);
+    assert.match(log, /value: \[redacted\]/);
+  } finally {
+    await rm(dir, { force: true, recursive: true });
+  }
+});
+
+test("force re-runs cached tasks and refreshes the cache entry", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "async-pipeline-force-"));
+  try {
+    await writeFile(join(dir, "input.txt"), "stable\n", "utf8");
+    const pipeline = () => definePipeline({
+      name: "force-test",
+      cache: "file:local",
+      tasks: {
+        build: task({
+          inputs: ["input.txt"],
+          cache: true,
+          run: sh`node -e "process.exit(0)"`
+        })
+      },
+      jobs: { build: job({ target: "build" }) }
+    });
+    const workspace = hostWorkspace({ cwd: dir, env: { PATH: process.env.PATH } });
+
+    const cold = await runJob(pipeline(), { id: "build", workspace });
+    assert.equal(cold.tasks[0]?.status, "passed");
+    const warm = await runJob(pipeline(), { id: "build", workspace });
+    assert.equal(warm.tasks[0]?.status, "cached");
+    const forced = await runJob(pipeline(), { id: "build", workspace, force: true });
+    assert.equal(forced.tasks[0]?.status, "passed");
+    const warmAgain = await runJob(pipeline(), { id: "build", workspace });
+    assert.equal(warmAgain.tasks[0]?.status, "cached");
+  } finally {
+    await rm(dir, { force: true, recursive: true });
+  }
+});
+
+test("planJob predicts cache hits without executing tasks", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "async-pipeline-plan-"));
+  try {
+    await writeFile(join(dir, "input.txt"), "stable\n", "utf8");
+    const pipeline = () => definePipeline({
+      name: "plan-test",
+      cache: "file:local",
+      tasks: {
+        build: task({
+          inputs: ["input.txt"],
+          cache: true,
+          run: sh`node -e "process.exit(0)"`
+        })
+      },
+      jobs: { build: job({ target: "build" }) }
+    });
+    const workspace = hostWorkspace({ cwd: dir, env: { PATH: process.env.PATH } });
+
+    const coldPlan = await planJob(pipeline(), { id: "build", workspace });
+    assert.deepEqual(coldPlan.executionOrder, ["build"]);
+    assert.equal(coldPlan.entries[0]?.predicted, "run");
+
+    await runJob(pipeline(), { id: "build", workspace });
+    const warmPlan = await planJob(pipeline(), { id: "build", workspace });
+    assert.equal(warmPlan.entries[0]?.predicted, "cached");
+  } finally {
+    await rm(dir, { force: true, recursive: true });
+  }
+});
+
+test("a throwing deferred step factory fails the task and finalizes the record", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "async-pipeline-crash-"));
+  try {
+    const pipeline = definePipeline({
+      name: "crash-test",
+      tasks: {
+        boom: task({
+          cache: false,
+          run: sh(() => {
+            throw new Error("factory exploded");
+          })
+        })
+      },
+      jobs: { boom: job({ target: "boom" }) }
+    });
+
+    const record = await runJob(pipeline, {
+      id: "boom",
+      workspace: hostWorkspace({ cwd: dir, env: { PATH: process.env.PATH } })
+    });
+
+    assert.equal(record.status, "failed");
+    assert.match(record.tasks[0]?.error ?? "", /factory exploded/);
+    const persisted = JSON.parse(await readFile(join(dir, ".async", "runs", record.id, "execution.json"), "utf8"));
+    assert.equal(persisted.status, "failed");
+    assert.ok(persisted.finishedAt, "record must not be left in running state");
+  } finally {
+    await rm(dir, { force: true, recursive: true });
+  }
+});
+
+test("requireEnvironment command policy denies unless ASYNC_PIPELINE_ENVIRONMENT matches", async () => {
+  const proxy = commandProxy({
+    rules: [command.rule({ exact: [["deploy"]][0], action: command.requireEnvironment({ name: "prod" }) })],
+    record: true
+  });
+
+  const denied = await proxy.run(
+    { argv: ["deploy"], cwd: process.cwd(), env: {} },
+    async () => ({ code: 0, stdout: "ran\n", stderr: "" })
+  );
+  assert.equal(denied.code, 1);
+  assert.match(denied.stderr, /requires environment "prod"/);
+
+  const allowed = await proxy.run(
+    { argv: ["deploy"], cwd: process.cwd(), env: { ASYNC_PIPELINE_ENVIRONMENT: "prod" } },
+    async () => ({ code: 0, stdout: "ran\n", stderr: "" })
+  );
+  assert.equal(allowed.code, 0);
+  assert.equal(allowed.stdout, "ran\n");
+});
+
+test("docker commands forward only allowlisted env keys", async () => {
+  const { DockerCommandExecutor } = await import("../packages/pipeline-node/dist/runner.js");
+  const executor = new DockerCommandExecutor({
+    image: "node:24",
+    hostCwd: "/repo",
+    workdir: "/workspace",
+    volumes: [{ source: "/repo", target: "/workspace" }]
+  });
+  // TS-private is erased at runtime; reach in to verify the rendered command.
+  const rendered = executor["dockerCommand"](
+    "echo hi",
+    "/repo",
+    { HOST_SECRET_TOKEN: "leak-me", ASYNC_PIPELINE_ROOT_DIR: "/repo", CI: "true" },
+    ["ASYNC_PIPELINE_ROOT_DIR", "CI", "MISSING_KEY"]
+  );
+  assert.match(rendered, /-e 'ASYNC_PIPELINE_ROOT_DIR'/);
+  assert.match(rendered, /-e 'CI'/);
+  assert.doesNotMatch(rendered, /HOST_SECRET_TOKEN/);
+  assert.doesNotMatch(rendered, /MISSING_KEY/);
 });

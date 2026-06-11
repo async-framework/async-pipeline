@@ -15,9 +15,23 @@ export interface CommandResult {
   timedOut?: boolean;
 }
 
+export interface RunShellOptions {
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+  task: NormalizedTask;
+  timeoutMs?: number;
+  echo?: boolean;
+  redactValues?: readonly string[];
+  /**
+   * Env keys safe to forward into isolated executors (docker). When omitted,
+   * isolating executors forward nothing beyond their own defaults.
+   */
+  forwardEnvKeys?: readonly string[];
+}
+
 export interface CommandExecutor {
   name: string;
-  runShell(command: string, options: { cwd: string; env: NodeJS.ProcessEnv; task: NormalizedTask; timeoutMs?: number }): Promise<CommandResult>;
+  runShell(command: string, options: RunShellOptions): Promise<CommandResult>;
   checkTool?(tool: string): Promise<boolean>;
 }
 
@@ -69,8 +83,8 @@ export interface HostWorkspaceOptions {
 export class HostCommandExecutor implements CommandExecutor {
   name = "host";
 
-  runShell(command: string, options: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs?: number }): Promise<CommandResult> {
-    return runProcess(command, { cwd: options.cwd, env: options.env, timeoutMs: options.timeoutMs });
+  runShell(command: string, options: RunShellOptions): Promise<CommandResult> {
+    return runProcess(command, { cwd: options.cwd, env: options.env, echo: options.echo, timeoutMs: options.timeoutMs, label: options.task?.id, redactValues: options.redactValues });
   }
 
   async checkTool(tool: string): Promise<boolean> {
@@ -99,12 +113,12 @@ export class DockerCommandExecutor implements CommandExecutor {
 
   constructor(private readonly options: { image: string; hostCwd: string; workdir: string; volumes: DockerVolume[] }) {}
 
-  runShell(command: string, options: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs?: number }): Promise<CommandResult> {
-    return runProcess(this.dockerCommand(command, options.cwd, options.env), { cwd: this.options.hostCwd, env: options.env, timeoutMs: options.timeoutMs });
+  runShell(command: string, options: RunShellOptions): Promise<CommandResult> {
+    return runProcess(this.dockerCommand(command, options.cwd, options.env, options.forwardEnvKeys ?? []), { cwd: this.options.hostCwd, env: options.env, echo: options.echo, timeoutMs: options.timeoutMs, label: options.task?.id, redactValues: options.redactValues });
   }
 
   async checkTool(tool: string): Promise<boolean> {
-    const result = await runProcess(this.dockerCommand(`command -v ${shellEscape(tool)}`, this.options.hostCwd, process.env), {
+    const result = await runProcess(this.dockerCommand(`command -v ${shellEscape(tool)}`, this.options.hostCwd, process.env, []), {
       cwd: this.options.hostCwd,
       env: process.env,
       echo: false
@@ -112,7 +126,10 @@ export class DockerCommandExecutor implements CommandExecutor {
     return result.code === 0;
   }
 
-  private dockerCommand(command: string, cwd: string, env: NodeJS.ProcessEnv): string {
+  private dockerCommand(command: string, cwd: string, env: NodeJS.ProcessEnv, forwardEnvKeys: readonly string[]): string {
+    // Only explicitly forwarded keys cross the container boundary. Forwarding
+    // the whole host env would leak unrelated secrets into every container.
+    const forwarded = [...new Set(forwardEnvKeys)].filter((key) => env[key] !== undefined).sort();
     return [
       "docker",
       "run",
@@ -120,7 +137,7 @@ export class DockerCommandExecutor implements CommandExecutor {
       "-w",
       shellEscape(this.containerCwd(cwd)),
       ...this.options.volumes.flatMap((volume) => ["-v", shellEscape(`${volume.source}:${volume.target}${volume.readonly ? ":ro" : ""}`)]),
-      ...Object.keys(env).filter((key) => env[key] !== undefined).flatMap((key) => ["-e", shellEscape(key)]),
+      ...forwarded.flatMap((key) => ["-e", shellEscape(key)]),
       shellEscape(this.options.image),
       "bash",
       "-lc",
@@ -141,10 +158,10 @@ export class LimaCommandExecutor implements CommandExecutor {
 
   constructor(private readonly vm = "async-pipeline") {}
 
-  runShell(command: string, options: { cwd: string; env: NodeJS.ProcessEnv; task: NormalizedTask; timeoutMs?: number }): Promise<CommandResult> {
+  runShell(command: string, options: RunShellOptions): Promise<CommandResult> {
     const vm = options.task.environment?.vm ?? this.vm;
     const escaped = shellEscape(`cd ${shellEscape(options.cwd)} && ${command}`);
-    return runProcess(`limactl shell ${shellEscape(vm)} -- bash -lc ${escaped}`, { cwd: options.cwd, env: options.env, timeoutMs: options.timeoutMs });
+    return runProcess(`limactl shell ${shellEscape(vm)} -- bash -lc ${escaped}`, { cwd: options.cwd, env: options.env, echo: options.echo, timeoutMs: options.timeoutMs, label: options.task?.id, redactValues: options.redactValues });
   }
 
   async checkTool(tool: string): Promise<boolean> {
@@ -199,7 +216,7 @@ export function commandProxy(policy: CommandPolicy = { rules: [] }): WorkspaceCo
       const started = Date.now();
       const action = matchingAction(policy, invocation.argv);
       const status = commandStatus(action);
-      const result = await runCommandAction(action, next);
+      const result = await runCommandAction(action, invocation, next);
       const outputPolicy = action.output ?? policy.output ?? {};
       if (policy.record) {
         records.push({
@@ -250,6 +267,8 @@ export interface RunOptions {
   id: string;
   mode?: "manual" | "ci";
   concurrency?: number;
+  force?: boolean;
+  echo?: boolean;
   workspace?: PipelineWorkspace;
 }
 
@@ -320,6 +339,7 @@ export async function runJob(pipeline: NormalizedPipeline, options: RunOptions):
         rootCwd: workspace.cwd,
         runId: record.id,
         workspaceEnv: workspace.env,
+        echo: options.echo,
         store
       });
       sourcePreparePromises.set(source.id, promise);
@@ -368,55 +388,188 @@ export async function runJob(pipeline: NormalizedPipeline, options: RunOptions):
         dependency,
         taskFingerprints.get(dependency) ?? null
       ])),
+      force: options.force,
+      echo: options.echo,
       store
     });
     results.push({ order: graphIndex.get(taskId) ?? results.length, result });
     return { taskId, failed: result.status === "failed", results, taskResult: result };
   };
 
-  while (ready.length > 0 || running.size > 0) {
-    while (!failed && ready.length > 0 && running.size < concurrency) {
-      const taskId = ready.shift();
-      if (!taskId) break;
-      running.set(taskId, runScheduledTask(taskId));
-    }
+  const scheduleTask = (taskId: string): Promise<ScheduledTaskExecution> =>
+    // The scheduler races these promises, so they must never reject: an
+    // unexpected throw becomes a failed task result and the record finalizes.
+    runScheduledTask(taskId).catch((error: unknown) => {
+      const result: TaskResult = {
+        id: taskId,
+        status: "failed",
+        startedAt: new Date().toISOString(),
+        finishedAt: new Date().toISOString(),
+        durationMs: 0,
+        attempts: 0,
+        cacheHit: false,
+        error: error instanceof Error ? error.message : String(error)
+      };
+      return {
+        taskId,
+        failed: true,
+        results: [{ order: graphIndex.get(taskId) ?? 0, result }],
+        taskResult: result
+      };
+    });
 
-    if (running.size === 0) break;
-
-    const completed = await Promise.race(running.values());
-    running.delete(completed.taskId);
-
-    for (const entry of completed.results) {
-      recordedResults.set(entry.result.id, entry);
-    }
-    if (completed.taskResult) {
-      taskFingerprints.set(completed.taskId, completed.taskResult.cacheKey ?? `${completed.taskId}:${completed.taskResult.status}`);
-    }
-    await updateRecord();
-
-    if (completed.failed) {
-      failed = true;
-      ready.length = 0;
-      continue;
-    }
-
-    if (failed || !completed.taskResult) continue;
-    const node = graphNodes.get(completed.taskId);
-    for (const dependent of node?.dependents ?? []) {
-      if (!plan.pipeline.tasks[dependent]) continue;
-      const remaining = Math.max(0, (dependencyCounts.get(dependent) ?? 0) - 1);
-      dependencyCounts.set(dependent, remaining);
-      if (remaining === 0) {
-        ready.push(dependent);
+  try {
+    while (ready.length > 0 || running.size > 0) {
+      while (!failed && ready.length > 0 && running.size < concurrency) {
+        const taskId = ready.shift();
+        if (!taskId) break;
+        running.set(taskId, scheduleTask(taskId));
       }
+
+      if (running.size === 0) break;
+
+      const completed = await Promise.race(running.values());
+      running.delete(completed.taskId);
+
+      for (const entry of completed.results) {
+        recordedResults.set(entry.result.id, entry);
+      }
+      if (completed.taskResult) {
+        taskFingerprints.set(completed.taskId, completed.taskResult.cacheKey ?? `${completed.taskId}:${completed.taskResult.status}`);
+      }
+      await updateRecord();
+
+      if (completed.failed) {
+        failed = true;
+        ready.length = 0;
+        continue;
+      }
+
+      if (failed || !completed.taskResult) continue;
+      const node = graphNodes.get(completed.taskId);
+      for (const dependent of node?.dependents ?? []) {
+        if (!plan.pipeline.tasks[dependent]) continue;
+        const remaining = Math.max(0, (dependencyCounts.get(dependent) ?? 0) - 1);
+        dependencyCounts.set(dependent, remaining);
+        if (remaining === 0) {
+          ready.push(dependent);
+        }
+      }
+      ready.sort((left, right) => (graphIndex.get(left) ?? 0) - (graphIndex.get(right) ?? 0));
     }
-    ready.sort((left, right) => (graphIndex.get(left) ?? 0) - (graphIndex.get(right) ?? 0));
+  } catch (error) {
+    // Never leave an execution record stuck in "running" on disk.
+    record.status = "failed";
+    record.finishedAt = new Date().toISOString();
+    await writeExecution(store, record).catch(() => {});
+    throw error;
   }
 
   record.status = failed ? "failed" : "passed";
   record.finishedAt = new Date().toISOString();
   await writeExecution(store, record);
   return record;
+}
+
+export interface TaskPlanEntry {
+  id: string;
+  cacheEnabled: boolean;
+  predicted: "run" | "cached" | "unknown";
+  cacheKey?: string;
+  reason?: string;
+}
+
+export interface JobPlan {
+  jobId: string;
+  executionOrder: string[];
+  entries: TaskPlanEntry[];
+}
+
+/**
+ * Computes the execution order and predicted cache behavior for a job without running it.
+ * Predictions reuse the real cache-key chain but do not validate cached output files.
+ */
+export async function planJob(pipeline: NormalizedPipeline, options: { id: string; workspace?: PipelineWorkspace }): Promise<JobPlan> {
+  const workspace = options.workspace ?? hostWorkspace();
+  const store = await createStore(workspace.cwd);
+  const plan = await createRunPlan(pipeline, workspace.cwd, store);
+  const graph = tasksForJob(plan.pipeline, options.id);
+  const jobDefinition = plan.pipeline.jobs[options.id];
+  const envDefinitions = {
+    ...plan.pipeline.env,
+    ...(jobDefinition?.env ?? {})
+  };
+  const fingerprints = new Map<string, string | null>();
+  const entries: TaskPlanEntry[] = [];
+
+  for (const taskId of graph.executionOrder) {
+    const taskDefinition = plan.pipeline.tasks[taskId];
+    if (!taskDefinition) continue;
+    try {
+      const taskCwd = taskDefinition.source?.dir || workspace.cwd;
+      const resolvedEnv = buildTaskEnv(workspace.env, {
+        candidate: plan.candidate,
+        envDefinitions,
+        rootCwd: workspace.cwd,
+        source: taskDefinition.source,
+        taskId
+      });
+      const context = createTaskContext(taskDefinition, {
+        candidate: plan.candidate,
+        cwd: taskCwd,
+        env: resolvedEnv.env,
+        metadata: {},
+        rootCwd: workspace.cwd,
+        runId: "dry-run",
+        source: taskDefinition.source,
+        writeLog() {}
+      });
+      const steps = await resolveTaskSteps(taskDefinition.steps, context);
+      const taskSource = taskDefinition.source?.name ? plan.sources[taskDefinition.source.name] : undefined;
+      const prepareCommands = taskSource
+        ? (await resolvePrepareCommands(taskSource, {
+            candidate: plan.candidate,
+            rootCwd: workspace.cwd,
+            runId: "dry-run",
+            workspaceEnv: workspace.env
+          })).map((command) => command.command)
+        : [];
+      const cacheKey = await computeTaskCacheKey(plan.pipeline, taskDefinition, taskCwd, {
+        candidate: plan.candidate,
+        dependencyFingerprints: Object.fromEntries(taskDefinition.dependsOn.map((dependency) => [
+          dependency,
+          fingerprints.get(dependency) ?? null
+        ])),
+        prepareCommands,
+        source: taskDefinition.source,
+        steps
+      });
+      fingerprints.set(taskId, cacheKey);
+      if (!taskDefinition.cache.enabled) {
+        entries.push({ id: taskId, cacheEnabled: false, predicted: "run", cacheKey });
+        continue;
+      }
+      const cached = await readTaskCacheEntry(taskDefinition, store, cacheKey);
+      const fresh = cached?.status === "passed" && isCacheEntryFresh(cached, taskDefinition.cache.ttlMs);
+      entries.push({
+        id: taskId,
+        cacheEnabled: true,
+        predicted: fresh ? "cached" : "run",
+        cacheKey,
+        reason: fresh ? undefined : cached ? "stale or unusable cache entry" : "no cache entry"
+      });
+    } catch (error) {
+      fingerprints.set(taskId, null);
+      entries.push({
+        id: taskId,
+        cacheEnabled: taskDefinition.cache.enabled ?? false,
+        predicted: "unknown",
+        reason: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
+
+  return { jobId: options.id, executionOrder: graph.executionOrder, entries };
 }
 
 export async function runSingleTask(pipeline: NormalizedPipeline, taskId: string, options: RunSingleTaskOptions = {}): Promise<ExecutionRecord> {
@@ -444,6 +597,8 @@ async function runTask(
     envDefinitions: Record<string, EnvValue>;
     sourcePrepareCommands?: ShellCommand[];
     dependencyFingerprints?: Record<string, string | null>;
+    force?: boolean;
+    echo?: boolean;
     workspaceEnv: NodeJS.ProcessEnv;
     store: PipelineStore;
   }
@@ -453,14 +608,19 @@ async function runTask(
   const metadata: Record<string, string | number | boolean | null> = {};
   let combinedLog = "";
   let taskEnv: NodeJS.ProcessEnv;
+  let envSecretValues: string[] = [];
+  let forwardEnvKeys: string[] = [];
   try {
-    taskEnv = buildTaskEnv(options.workspaceEnv, {
+    const resolvedTaskEnv = buildTaskEnv(options.workspaceEnv, {
       candidate: options.candidate,
       envDefinitions: options.envDefinitions,
       rootCwd: options.rootCwd,
       source: options.source,
       taskId: taskDefinition.id
     });
+    taskEnv = resolvedTaskEnv.env;
+    envSecretValues = resolvedTaskEnv.secretValues;
+    forwardEnvKeys = [...resolvedTaskEnv.definedKeys, ...(taskDefinition.requires?.secrets ?? [])];
   } catch (error) {
     const lastError = error instanceof Error ? error.message : String(error);
     await writeTaskLog(options.store, options.runId, taskDefinition.id, `[env] ${lastError}\n`);
@@ -488,6 +648,13 @@ async function runTask(
       combinedLog += `${message}\n`;
     }
   });
+  const redactValues = [
+    ...envSecretValues,
+    ...(taskDefinition.requires?.secrets ?? [])
+      .map((secret) => taskEnv[secret])
+      .filter((value): value is string => typeof value === "string" && value.length > 0)
+  ];
+  const redactLog = (log: string): string => redactKnownValues(log, redactValues);
   const resolvedSteps = await resolveTaskSteps(taskDefinition.steps, context);
   const cacheKey = await computeTaskCacheKey(pipeline, taskDefinition, options.cwd, {
     candidate: options.candidate,
@@ -497,7 +664,7 @@ async function runTask(
     steps: resolvedSteps
   });
 
-  if (taskDefinition.cache.enabled) {
+  if (taskDefinition.cache.enabled && !options.force) {
     const cached = await readTaskCacheEntry(taskDefinition, options.store, cacheKey);
     if (cached?.status === "passed") {
       const cacheHit = await validateTaskCacheHit(taskDefinition, options.store, cacheKey, options.cwd, cached);
@@ -548,7 +715,7 @@ async function runTask(
         if (!isShellCommand(step)) {
           throw new Error(`Deferred shell step for task "${taskDefinition.id}" was not resolved.`);
         }
-        const result = await runShellStep(step, taskDefinition, { ...options, env: taskEnv });
+        const result = await runShellStep(step, taskDefinition, { executor: options.executor, cwd: options.cwd, env: taskEnv, echo: options.echo, redactValues, forwardEnvKeys });
         combinedLog += result.stdout;
         combinedLog += result.stderr;
         if (result.timedOut) {
@@ -571,7 +738,7 @@ async function runTask(
         cacheHit: false,
         metadata
       };
-      await writeTaskLog(options.store, options.runId, taskDefinition.id, combinedLog);
+      await writeTaskLog(options.store, options.runId, taskDefinition.id, redactLog(combinedLog));
       if (taskDefinition.cache.enabled) {
         await writeTaskCacheEntry(taskDefinition, options.store, cacheKey, result, options.cwd);
       }
@@ -597,26 +764,29 @@ async function runTask(
     error: lastError,
     metadata
   };
-  await writeTaskLog(options.store, options.runId, taskDefinition.id, combinedLog);
+  await writeTaskLog(options.store, options.runId, taskDefinition.id, redactLog(combinedLog));
   return result;
 }
 
 async function runShellStep(
   step: ShellCommand,
   taskDefinition: NormalizedTask,
-  options: { executor: CommandExecutor; cwd: string; env: NodeJS.ProcessEnv }
+  options: { executor: CommandExecutor; cwd: string; env: NodeJS.ProcessEnv; echo?: boolean; redactValues?: readonly string[]; forwardEnvKeys?: readonly string[] }
 ): Promise<CommandResult> {
   return options.executor.runShell(step.command, {
     cwd: options.cwd,
     env: options.env,
     task: taskDefinition,
-    timeoutMs: taskDefinition.timeoutMs
+    timeoutMs: taskDefinition.timeoutMs,
+    echo: options.echo,
+    redactValues: options.redactValues,
+    forwardEnvKeys: options.forwardEnvKeys
   });
 }
 
 async function runSourcePrepare(
   source: ResolvedSource,
-  options: { candidate: CandidateContext; executor: CommandExecutor; rootCwd: string; runId: string; workspaceEnv: NodeJS.ProcessEnv; store: PipelineStore }
+  options: { candidate: CandidateContext; executor: CommandExecutor; rootCwd: string; runId: string; workspaceEnv: NodeJS.ProcessEnv; echo?: boolean; store: PipelineStore }
 ): Promise<TaskResult | null> {
   if (source.definition.prepare.length === 0) return null;
 
@@ -625,14 +795,15 @@ async function runSourcePrepare(
   const taskId = `${source.id}:prepare`;
   const sourceTaskContext = sourceContext(source);
   let log = "";
+  const prepareEnv = buildTaskEnv(options.workspaceEnv, {
+    candidate: options.candidate,
+    rootCwd: options.rootCwd,
+    source: sourceTaskContext
+  });
   const context = createTaskContext({ id: taskId } as NormalizedTask, {
     candidate: options.candidate,
     cwd: source.dir,
-    env: buildTaskEnv(options.workspaceEnv, {
-      candidate: options.candidate,
-      rootCwd: options.rootCwd,
-      source: sourceTaskContext
-    }),
+    env: prepareEnv.env,
     metadata: {},
     rootCwd: options.rootCwd,
     runId: options.runId,
@@ -654,12 +825,11 @@ async function runSourcePrepare(
       }
       const result = await options.executor.runShell(step.command, {
         cwd: source.dir,
-        env: buildTaskEnv(options.workspaceEnv, {
-          candidate: options.candidate,
-          rootCwd: options.rootCwd,
-          source: sourceTaskContext
-        }),
-        task: { id: taskId } as NormalizedTask
+        env: prepareEnv.env,
+        task: { id: taskId } as NormalizedTask,
+        echo: options.echo,
+        redactValues: prepareEnv.secretValues,
+        forwardEnvKeys: prepareEnv.definedKeys
       });
       log += result.stdout;
       log += result.stderr;
@@ -706,7 +876,7 @@ async function resolvePrepareCommands(
       candidate: options.candidate,
       rootCwd: options.rootCwd,
       source: sourceContext(source)
-    }),
+    }).env,
     metadata: {},
     rootCwd: options.rootCwd,
     runId: options.runId,
@@ -766,14 +936,19 @@ function createTaskContext(
   };
 }
 
+interface ResolvedTaskEnv {
+  env: NodeJS.ProcessEnv;
+  secretValues: string[];
+  /** Pipeline-defined env keys plus ASYNC_PIPELINE_* context: the set isolating executors may forward. */
+  definedKeys: string[];
+}
+
 function buildTaskEnv(
   baseEnv: NodeJS.ProcessEnv,
   options: { candidate: CandidateContext; envDefinitions?: Record<string, EnvValue>; rootCwd: string; source?: TaskSourceContext; taskId?: string }
-): NodeJS.ProcessEnv {
-  const resolvedEnv = resolveEnvDefinitions(options.envDefinitions ?? {}, baseEnv, options.taskId);
-  return {
-    ...baseEnv,
-    ...resolvedEnv,
+): ResolvedTaskEnv {
+  const { resolved: resolvedEnv, secretValues } = resolveEnvDefinitions(options.envDefinitions ?? {}, baseEnv, options.taskId);
+  const contextEnv = {
     ASYNC_PIPELINE_ROOT_DIR: options.rootCwd,
     ASYNC_PIPELINE_CANDIDATE_DIR: options.candidate.dir,
     ASYNC_PIPELINE_CANDIDATE_FINGERPRINT: options.candidate.fingerprint,
@@ -782,10 +957,24 @@ function buildTaskEnv(
     ASYNC_PIPELINE_SOURCE_REF: options.source?.ref,
     ASYNC_PIPELINE_SOURCE_COMMIT: options.source?.commit
   };
+  return {
+    env: {
+      ...baseEnv,
+      ...resolvedEnv,
+      ...contextEnv
+    },
+    secretValues,
+    definedKeys: [...Object.keys(resolvedEnv), ...Object.keys(contextEnv), "CI"]
+  };
 }
 
-function resolveEnvDefinitions(definitions: Record<string, EnvValue>, baseEnv: NodeJS.ProcessEnv, taskId = "unknown"): Record<string, string> {
+function resolveEnvDefinitions(
+  definitions: Record<string, EnvValue>,
+  baseEnv: NodeJS.ProcessEnv,
+  taskId = "unknown"
+): { resolved: Record<string, string>; secretValues: string[] } {
   const resolved: Record<string, string> = {};
+  const secretValues: string[] = [];
   for (const [key, value] of Object.entries(definitions)) {
     if (typeof value === "string") {
       resolved[key] = value;
@@ -797,6 +986,7 @@ function resolveEnvDefinitions(definitions: Record<string, EnvValue>, baseEnv: N
         throw new Error(`Required secret "${value.name}" for env "${key}" is not available for task "${taskId}".`);
       }
       resolved[key] = secretValue;
+      secretValues.push(secretValue);
       continue;
     }
     if (value.kind === "async-pipeline.env.var") {
@@ -816,7 +1006,7 @@ function resolveEnvDefinitions(definitions: Record<string, EnvValue>, baseEnv: N
       continue;
     }
   }
-  return resolved;
+  return { resolved, secretValues };
 }
 
 function isShellCommand(step: TaskStep): step is ShellCommand {
@@ -916,12 +1106,19 @@ async function runFunctionStep(step: TaskRunFunction, context: TaskContext, time
   }
 }
 
-function runProcess(command: string, options: { cwd: string; env: NodeJS.ProcessEnv; echo?: boolean; timeoutMs?: number }): Promise<CommandResult> {
+function runProcess(
+  command: string,
+  options: { cwd: string; env: NodeJS.ProcessEnv; echo?: boolean; timeoutMs?: number; label?: string; redactValues?: readonly string[] }
+): Promise<CommandResult> {
   return new Promise((resolve) => {
+    // detached puts the shell in its own process group on POSIX so a timeout
+    // can terminate the whole tree, not only the wrapping shell.
+    const detached = process.platform !== "win32";
     const child = spawn(command, {
       cwd: options.cwd,
       env: options.env,
       shell: true,
+      detached,
       stdio: ["ignore", "pipe", "pipe"]
     });
     let stdout = "";
@@ -929,12 +1126,26 @@ function runProcess(command: string, options: { cwd: string; env: NodeJS.Process
     let timedOut = false;
     let timeout: NodeJS.Timeout | undefined;
     let forceKillTimeout: NodeJS.Timeout | undefined;
+    const redactValues = options.redactValues ?? [];
+    const echoStdout = createEchoWriter(process.stdout, options.label, redactValues);
+    const echoStderr = createEchoWriter(process.stderr, options.label, redactValues);
+    const killTree = (signal: NodeJS.Signals): void => {
+      if (detached && child.pid) {
+        try {
+          process.kill(-child.pid, signal);
+          return;
+        } catch {
+          // Fall through to killing the direct child.
+        }
+      }
+      child.kill(signal);
+    };
 
     if (options.timeoutMs) {
       timeout = setTimeout(() => {
         timedOut = true;
-        child.kill("SIGTERM");
-        forceKillTimeout = setTimeout(() => child.kill("SIGKILL"), 500);
+        killTree("SIGTERM");
+        forceKillTimeout = setTimeout(() => killTree("SIGKILL"), 500);
       }, options.timeoutMs);
     }
 
@@ -942,15 +1153,21 @@ function runProcess(command: string, options: { cwd: string; env: NodeJS.Process
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => {
       stdout += chunk;
-      if (options.echo !== false) process.stdout.write(chunk);
+      if (options.echo !== false) echoStdout.write(chunk);
     });
     child.stderr.on("data", (chunk: string) => {
       stderr += chunk;
-      if (options.echo !== false) process.stderr.write(chunk);
+      if (options.echo !== false) echoStderr.write(chunk);
     });
     child.on("close", (code) => {
       if (timeout) clearTimeout(timeout);
       if (forceKillTimeout) clearTimeout(forceKillTimeout);
+      if (options.echo !== false) {
+        echoStdout.flush();
+        echoStderr.flush();
+      }
+      stdout = redactKnownValues(stdout, redactValues);
+      stderr = redactKnownValues(stderr, redactValues);
       if (timedOut) {
         const timeoutMessage = `[timeout] Command timed out after ${options.timeoutMs}ms.\n`;
         resolve({ code: 124, stdout, stderr: `${stderr}${timeoutMessage}`, timedOut: true });
@@ -959,6 +1176,44 @@ function runProcess(command: string, options: { cwd: string; env: NodeJS.Process
       resolve({ code: code ?? 1, stdout, stderr });
     });
   });
+}
+
+interface EchoWriter {
+  write(chunk: string): void;
+  flush(): void;
+}
+
+function createEchoWriter(stream: NodeJS.WriteStream, label: string | undefined, redactValues: readonly string[]): EchoWriter {
+  let buffered = "";
+  const prefix = label ? `[${label}] ` : "";
+  const writeLine = (line: string): void => {
+    stream.write(`${prefix}${redactKnownValues(line, redactValues)}\n`);
+  };
+  return {
+    write(chunk: string): void {
+      buffered += chunk;
+      const lastNewline = buffered.lastIndexOf("\n");
+      if (lastNewline < 0) return;
+      for (const line of buffered.slice(0, lastNewline).split("\n")) writeLine(line);
+      buffered = buffered.slice(lastNewline + 1);
+    },
+    flush(): void {
+      if (!buffered) return;
+      writeLine(buffered);
+      buffered = "";
+    }
+  };
+}
+
+const MIN_REDACTED_VALUE_LENGTH = 4;
+
+function redactKnownValues(output: string, values: readonly string[]): string {
+  let redacted = output;
+  for (const value of [...new Set(values)].sort((left, right) => right.length - left.length)) {
+    if (!value || value.length < MIN_REDACTED_VALUE_LENGTH) continue;
+    redacted = redacted.split(value).join("[redacted]");
+  }
+  return redacted;
 }
 
 function matchingAction(policy: CommandPolicy, argv: string[]): CommandAction {
@@ -989,9 +1244,17 @@ function commandStatus(action: CommandAction): CommandPolicyStatus {
   return "allowed";
 }
 
-async function runCommandAction(action: CommandAction, next: () => Promise<CommandResult>): Promise<CommandResult> {
+async function runCommandAction(action: CommandAction, invocation: CommandInvocation, next: () => Promise<CommandResult>): Promise<CommandResult> {
   if (action.kind === "async-pipeline.command.allow") return next();
-  if (action.kind === "async-pipeline.command.requireEnvironment") return next();
+  if (action.kind === "async-pipeline.command.requireEnvironment") {
+    const current = invocation.env.ASYNC_PIPELINE_ENVIRONMENT;
+    if (current === action.name) return next();
+    return {
+      code: 1,
+      stdout: "",
+      stderr: `Command requires environment "${action.name}" (current: ${current ? `"${current}"` : "unset"}). Set ASYNC_PIPELINE_ENVIRONMENT to allow it.\n`
+    };
+  }
   if (action.kind === "async-pipeline.command.mock") {
     return {
       code: action.code ?? 0,

@@ -208,7 +208,7 @@ Fields:
 | `inputs` | Files or named input groups that affect cache keys. `.git/`, `.async/`, `node_modules/`, and this task's declared outputs are ignored by input resolution. |
 | `outputs` | Files produced by the task. File cache snapshots and restores these files on a cache hit. |
 | `cache` | `true`, `false`, a cache ref such as `"file:local"`, or cache options. |
-| `retry` | Number of attempts or `{ attempts, delayMs }`. |
+| `retry` | Total attempts as a number, or `{ attempts, delayMs }`. `retry: 2` means at most two attempts (one retry); `retry: 1` or omitting it disables retries. |
 | `timeout` | Milliseconds or a duration string such as `500ms`, `30s`, `5m`, `1h`. |
 | `requires` | Tool, secret, or runtime declarations. |
 | `environment` | Backend declaration such as host or Lima. CLI routing to Lima is not automatic today. |
@@ -419,7 +419,20 @@ definePipeline({
 .github/async-pipeline.lock.json
 ```
 
-Use object form to render elsewhere, which is useful in tests:
+Use object form to render elsewhere or tune the generated workflow:
+
+```ts
+sync: {
+  github: {
+    workflow: ".tmp/async-pipeline.yml",
+    lock: ".tmp/async-pipeline.lock.json",
+    nodeVersion: 24,
+    cache: true
+  }
+}
+```
+
+`nodeVersion` selects the Node version installed by the generated workflow (default `24`). `cache: true` (the default) adds a pinned `actions/cache` step that restores `.async/cache` across CI runs so warm tasks resolve as `cached`; set `cache: false` to keep CI cold.
 
 ```ts
 sync: {
@@ -478,7 +491,9 @@ async-pipeline sync tasks generate
 async-pipeline sync tasks check
 async-pipeline github generate [--workflow <path>] [--lock <path>]
 async-pipeline github check [--workflow <path>] [--lock <path>]
-async-pipeline github run [--concurrency <n>]
+async-pipeline github run [--job <id>] [--concurrency <n>]
+async-pipeline cache clear
+async-pipeline gc [--keep <n>]
 ```
 
 `github generate` and `github check` are compatibility aliases for the GitHub sync implementation.
@@ -487,7 +502,7 @@ async-pipeline github run [--concurrency <n>]
 
 `github check` fails when generated files are stale.
 
-`github run` reads the GitHub event context and runs matching jobs. Pass `--concurrency <n>` to bound parallel ready-task execution.
+`github run` reads the GitHub event context and runs matching jobs. On `workflow_dispatch` only jobs with a `manual` trigger run implicitly; select others explicitly with `--job <id>`. Pass `--concurrency <n>` to bound parallel ready-task execution. `run --format json` emits the execution record; `cache clear` resets the task cache; `gc` prunes run records, and runs auto-prune to `ASYNC_PIPELINE_KEEP_RUNS` (default 50, `0` disables).
 
 ## Runtime Subpath
 

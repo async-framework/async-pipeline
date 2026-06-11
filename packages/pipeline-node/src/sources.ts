@@ -28,10 +28,15 @@ export interface ResolvedSource {
 }
 
 export interface SourceResolveOptions {
+  /** Fetch refs and force-checkout the declared ref, discarding local edits in the checkout. */
   sync?: boolean;
+  /** Clone missing checkouts and resolve the declared ref, but reuse existing checkouts without fetching. */
+  ensure?: boolean;
   loadPipelines?: boolean;
   requirePrepareWritable?: boolean;
 }
+
+type GitResolveMode = "skip" | "ensure" | "sync";
 
 export interface PipelineRunPlan {
   rootPipeline: NormalizedPipeline;
@@ -53,7 +58,7 @@ export interface MatrixRow {
 export async function createRunPlan(rootPipeline: NormalizedPipeline, cwd: string, store: PipelineStore): Promise<PipelineRunPlan> {
   const candidate = await computeCandidateContext(rootPipeline, cwd);
   const sources = await resolveSources(rootPipeline, cwd, store, {
-    sync: true,
+    ensure: true,
     loadPipelines: true,
     requirePrepareWritable: true
   });
@@ -87,7 +92,7 @@ export async function resolveSources(
     }
 
     const dir = sourceDefinition.type === "git"
-      ? await resolveGitSource(sourceDefinition, store, options.sync ?? false)
+      ? await resolveGitSource(sourceDefinition, store, options.sync ? "sync" : options.ensure ? "ensure" : "skip")
       : resolve(cwd, sourceDefinition.path);
     const pipelinePath = join(dir, sourceDefinition.pipeline);
     const commit = existsSync(dir) ? await gitOutput(["rev-parse", "HEAD"], dir).catch(() => undefined) : undefined;
@@ -192,20 +197,40 @@ export function shellCommandsFromSteps(steps: readonly ShellCommand[]): string[]
   return steps.map((step) => step.command);
 }
 
-async function resolveGitSource(sourceDefinition: NormalizedSource & { type: "git" }, store: PipelineStore, sync: boolean): Promise<string> {
+async function resolveGitSource(sourceDefinition: NormalizedSource & { type: "git" }, store: PipelineStore, mode: GitResolveMode): Promise<string> {
   const dir = sourceCheckoutDir(store, sourceDefinition);
-  if (!sync) return dir;
+  if (mode === "skip") return dir;
 
   await mkdir(dirname(dir), { recursive: true });
   if (!existsSync(join(dir, ".git"))) {
     await runGit(["clone", "--no-checkout", sourceDefinition.url, dir], store.root);
   }
 
-  if (!isFullCommit(sourceDefinition.ref)) {
+  const shouldFetch = mode === "sync"
+    ? !isFullCommit(sourceDefinition.ref)
+    : !await refResolvable(sourceDefinition.ref, dir);
+  if (shouldFetch) {
     await runGit(["fetch", "--tags", "origin"], dir);
   }
-  await runGit(["checkout", "--force", sourceDefinition.ref], dir);
+
+  if (mode === "sync") {
+    await runGit(["checkout", "--force", sourceDefinition.ref], dir);
+    return dir;
+  }
+
+  const target = await gitOutput(["rev-parse", "--verify", `${sourceDefinition.ref}^{commit}`], dir).catch(() => undefined);
+  if (!target) {
+    throw new Error(`Source "${sourceDefinition.id}" ref "${sourceDefinition.ref}" cannot be resolved in ${dir}. Run async-pipeline sources sync.`);
+  }
+  const head = await gitOutput(["rev-parse", "HEAD"], dir).catch(() => undefined);
+  if (head !== target) {
+    await runGit(["checkout", "--force", sourceDefinition.ref], dir);
+  }
   return dir;
+}
+
+async function refResolvable(ref: string, dir: string): Promise<boolean> {
+  return gitOutput(["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], dir).then(() => true, () => false);
 }
 
 function isFullCommit(ref: string): boolean {

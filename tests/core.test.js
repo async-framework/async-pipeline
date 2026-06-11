@@ -451,3 +451,24 @@ test("named input cycles fail fast at definePipeline time", () => {
     jobs: { j: job({ target: "t" }) }
   }), /ASYNC_PIPELINE_INPUT_CYCLE|Named input cycle/);
 });
+
+test("github runner config rejects invalid and conflicting settings", () => {
+  const base = {
+    name: "runners",
+    tasks: { t: task({ cache: false, run: sh`true` }) }
+  };
+  assert.throws(() => definePipeline({
+    ...base,
+    jobs: { j: job({ target: "t", github: { runsOn: "" } }) }
+  }), /ASYNC_PIPELINE_RUNS_ON_INVALID|invalid github\.runsOn/);
+
+  assert.throws(() => definePipeline({
+    ...base,
+    jobs: { j: job({ target: "t", github: { runsOnMatrix: [] } }) }
+  }), /ASYNC_PIPELINE_RUNS_ON_INVALID|runsOnMatrix must be a non-empty array/);
+
+  assert.throws(() => definePipeline({
+    ...base,
+    jobs: { j: job({ target: "t", github: { runsOn: "ubuntu-latest", runsOnMatrix: ["ubuntu-latest"] } }) }
+  }), /ASYNC_PIPELINE_RUNS_ON_CONFLICT|sets both github\.runsOn and github\.runsOnMatrix/);
+});

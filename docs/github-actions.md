@@ -44,6 +44,42 @@ sync: {
 }
 ```
 
+## Runner Selection
+
+Generated jobs run on `ubuntu-latest` by default. Use `job({ github: { runsOn } })` to select a hosted runner or self-hosted label set, and `job({ github: { runsOnMatrix } })` to fan a job out across multiple runner label sets:
+
+```ts
+jobs: {
+  verify: job({
+    target: "verify",
+    trigger: ["pr", "main"],
+    github: {
+      runsOnMatrix: [
+        "ubuntu-latest",
+        ["self-hosted", "macos", "tart"]
+      ]
+    }
+  })
+}
+```
+
+`runsOn` and `runsOnMatrix` are mutually exclusive; invalid or empty labels fail during pipeline normalization before workflow generation.
+
+### macOS Runners With Tart
+
+GitHub hosts the `ubuntu-*` and `macos-*` labels, but a label set such as `["self-hosted", "macos", "tart"]` expects a runner you provide on Apple Silicon using [Tart](https://tart.run) VMs. The self pipeline's `verify` job fans out across `ubuntu-latest` and that Tart label set.
+
+A minimal host setup:
+
+1. Install Tart on the Mac host and pull a base image: `tart clone ghcr.io/cirruslabs/macos-sequoia-base:latest runner-base`.
+2. Run an ephemeral runner manager such as [Tartelet](https://github.com/shapehq/tartelet) or [ekiden](https://github.com/mirego/ekiden) so every job executes in a fresh VM that is destroyed after one job.
+3. Register the runner against the repository or organization with the labels `self-hosted`, `macos`, and `tart`. The VM image needs Node `>= 24`; the generated workflow's setup-node step handles version selection from there.
+
+Confirm managed macOS runner availability before depending on it; self-hosting is the path this repository documents. Two cautions:
+
+- A job that targets labels with no registered runner queues until GitHub times it out. Keep the macOS leg out of your matrix until the host exists, or use a GitHub-hosted label such as `"macos-latest"` instead.
+- Self-hosted runners execute pull-request code on your hardware. For public repositories, require approval for workflow runs from outside collaborators (Settings -> Actions), or reserve self-hosted labels for `push` and `release` triggers.
+
 ## Generate The Bootloader
 
 ```sh

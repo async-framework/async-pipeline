@@ -102,6 +102,15 @@
       ]
     },
     {
+      "id": "github.runner-selection",
+      "source": "docs/github-actions.md",
+      "anchor": "Use `job({ github: { runsOn } })` to select a hosted runner or self-hosted label set, and `job({ github: { runsOnMatrix } })` to fan a job out across multiple runner label sets",
+      "tests": [
+        "renders github job runner labels and runner matrices",
+        "github runner config rejects invalid and conflicting settings"
+      ]
+    },
+    {
       "id": "readme.sync-conflict",
       "source": "README.md",
       "anchor": "If a generated command exists but is not claimed by the lock, it fails with `ASYNC_PIPELINE_SYNC_CONFLICT`.",

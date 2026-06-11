@@ -242,16 +242,32 @@ function renderWorkflow(model: ReturnType<typeof buildRenderModel>): string {
 }
 
 function renderJob(lines: string[], model: ReturnType<typeof buildRenderModel>, job: ReturnType<typeof buildRenderModel>["jobs"][number]): void {
+  const runnerMatrix = job.github?.runsOnMatrix;
   lines.push(
     `  ${yamlKey(job.id)}:`,
-    `    name: ${job.id}`
+    runnerMatrix && runnerMatrix.length > 0
+      ? `    name: ${job.id} (\${{ join(matrix.runner, ' ') }})`
+      : `    name: ${job.id}`
   );
   if (job.if) {
     lines.push(`    if: ${job.if}`);
   }
-  lines.push(
-    "    runs-on: ubuntu-latest"
-  );
+  if (runnerMatrix && runnerMatrix.length > 0) {
+    lines.push(
+      "    strategy:",
+      "      fail-fast: false",
+      "      matrix:",
+      "        runner:"
+    );
+    for (const entry of runnerMatrix) {
+      const labels = Array.isArray(entry) ? entry : [entry];
+      lines.push(`          - ${JSON.stringify(labels)}`);
+    }
+    lines.push("    runs-on: ${{ matrix.runner }}");
+  } else {
+    const runsOn = job.github?.runsOn ?? "ubuntu-latest";
+    lines.push(`    runs-on: ${Array.isArray(runsOn) ? JSON.stringify(runsOn) : runsOn}`);
+  }
   const environment = job.environment ?? job.github?.environment;
   if (environment) {
     renderGitHubEnvironment(lines, environment);

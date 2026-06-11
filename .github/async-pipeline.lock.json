@@ -3,8 +3,8 @@
   "generator": "@async/pipeline",
   "config": "pipeline.ts",
   "workflow": ".github/workflows/async-pipeline.yml",
-  "hash": "sha256:4d5d5aac7c8e8f9d2e942c3107985ba599a63d532848c7fa16980eaea882e82e",
-  "generatedAt": "2026-06-11T05:12:05.898Z",
+  "hash": "sha256:4230ac384ad8da4fa75521b5287a463a5be59fd4d62709c2dc9a6993f2ef9f21",
+  "generatedAt": "2026-06-11T09:01:40.988Z",
   "triggers": {
     "pull_request": {},
     "push": {
@@ -50,6 +50,16 @@
         "release"
       ],
       "env": {},
+      "github": {
+        "runsOnMatrix": [
+          "ubuntu-latest",
+          [
+            "self-hosted",
+            "macos",
+            "tart"
+          ]
+        ]
+      },
       "if": "(github.event_name == 'pull_request') || (github.event_name == 'push' && (github.ref == 'refs/heads/main')) || (github.event_name == 'release')"
     }
   ],

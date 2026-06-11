@@ -105,6 +105,46 @@ test("renders github job environment and secret env wiring", async () => {
   }
 });
 
+test("renders github job runner labels and runner matrices", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "async-pipeline-github-runners-"));
+  try {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ packageManager: "pnpm@10.20.0" }), "utf8");
+    const pipeline = definePipeline({
+      name: "runner-test",
+      triggers: {
+        manual: trigger.manual()
+      },
+      tasks: {
+        linux: task({ run: sh`echo linux` }),
+        mac: task({ run: sh`echo mac` }),
+        matrix: task({ run: sh`echo matrix` })
+      },
+      jobs: {
+        linux: job({ target: "linux", trigger: ["manual"], github: { runsOn: "ubuntu-24.04" } }),
+        mac: job({ target: "mac", trigger: ["manual"], github: { runsOn: ["self-hosted", "macos", "tart"] } }),
+        matrix: job({
+          target: "matrix",
+          trigger: ["manual"],
+          github: { runsOnMatrix: ["ubuntu-latest", ["self-hosted", "macos", "tart"]] }
+        })
+      }
+    });
+
+    const rendered = await renderGitHubWorkflow(pipeline, { cwd: dir, configPath: join(dir, "pipeline.ts") });
+
+    assert.match(rendered.workflow, /linux:\n    name: linux\n    if: github\.event_name == 'workflow_dispatch'\n    runs-on: ubuntu-24\.04/);
+    assert.match(rendered.workflow, /mac:\n    name: mac\n    if: github\.event_name == 'workflow_dispatch'\n    runs-on: \["self-hosted","macos","tart"\]/);
+    assert.match(rendered.workflow, /matrix:\n    name: matrix \(\$\{\{ join\(matrix\.runner, ' '\) \}\}\)/);
+    assert.match(rendered.workflow, /strategy:\n      fail-fast: false\n      matrix:\n        runner:\n          - \["ubuntu-latest"\]\n          - \["self-hosted","macos","tart"\]\n    runs-on: \$\{\{ matrix\.runner \}\}/);
+    assert.deepEqual(rendered.lock.jobs.find((entry) => entry.id === "matrix")?.github?.runsOnMatrix, [
+      "ubuntu-latest",
+      ["self-hosted", "macos", "tart"]
+    ]);
+  } finally {
+    rmSync(dir, { force: true, recursive: true });
+  }
+});
+
 test("matches github jobs from event context", () => {
   const pipeline = definePipeline({
     name: "test",

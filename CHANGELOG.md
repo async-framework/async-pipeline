@@ -23,6 +23,7 @@
 - Find `pipeline.ts` from subdirectories by walking up to the config root.
 - Add product-promise invariant tests (`tests/invariants.test.js`), release-drift checks (`scripts/check-release-drift.mjs`, wired into `release:check` and the self pipeline's `drift` task), and `AGENTS.md` definition-of-done rules for coding agents.
 - Add an executable claim -> test coverage map: `tests/claims.json` registers documented claims with the tests that enforce them, and `scripts/check-claims.mjs` (wired into `release:check` and the self pipeline's `claims` task) fails on stale claim anchors, claims pointing at missing tests, and unregistered `PROMISE:` tests.
+- Add `github.runsOn` and `github.runsOnMatrix` job options so generated GitHub Actions jobs can target hosted runners, self-hosted label sets, or a runner matrix.
 - Have `doctor` warn about unreadable run directories and stale `"running"` records.
 
 ### Fixes

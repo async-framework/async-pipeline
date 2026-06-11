@@ -354,6 +354,17 @@ export interface GitHubJobConfig {
     contents?: GitHubPermission;
     idToken?: "write" | "none";
   };
+  /**
+   * Runner for the generated GitHub Actions job. A string targets a hosted
+   * runner ("ubuntu-latest"); a string array is a self-hosted label set that
+   * a single runner must match entirely (["self-hosted", "macos", "tart"]).
+   */
+  runsOn?: string | string[];
+  /**
+   * Run the generated job once per entry through a GitHub Actions matrix.
+   * Each entry follows the `runsOn` shape. Mutually exclusive with `runsOn`.
+   */
+  runsOnMatrix?: Array<string | string[]>;
 }
 
 export interface PipelineDefinition {
@@ -713,6 +724,40 @@ function cloneCommandAction(action: CommandAction): CommandAction {
   return { ...action, output: action.output ? { ...action.output } : undefined };
 }
 
+function validateRunsOnEntry(jobId: JobId, entry: string | string[], field: string): void {
+  const labels = Array.isArray(entry) ? entry : [entry];
+  if (labels.length === 0 || labels.some((label) => typeof label !== "string" || label.trim() === "")) {
+    throw pipelineError(
+      "ASYNC_PIPELINE_RUNS_ON_INVALID",
+      `Job "${jobId}" has an invalid github.${field} entry; use a non-empty runner label or label array.`
+    );
+  }
+}
+
+function validateJobRunsOn(jobId: JobId, github: GitHubJobConfig | undefined): void {
+  if (!github) return;
+  if (github.runsOn !== undefined && github.runsOnMatrix !== undefined) {
+    throw pipelineError(
+      "ASYNC_PIPELINE_RUNS_ON_CONFLICT",
+      `Job "${jobId}" sets both github.runsOn and github.runsOnMatrix; choose one.`
+    );
+  }
+  if (github.runsOn !== undefined) {
+    validateRunsOnEntry(jobId, github.runsOn, "runsOn");
+  }
+  if (github.runsOnMatrix !== undefined) {
+    if (!Array.isArray(github.runsOnMatrix) || github.runsOnMatrix.length === 0) {
+      throw pipelineError(
+        "ASYNC_PIPELINE_RUNS_ON_INVALID",
+        `Job "${jobId}" github.runsOnMatrix must be a non-empty array of runner labels or label arrays.`
+      );
+    }
+    for (const entry of github.runsOnMatrix) {
+      validateRunsOnEntry(jobId, entry, "runsOnMatrix");
+    }
+  }
+}
+
 export function validatePipeline(pipeline: NormalizedPipeline): void {
   for (const taskDefinition of Object.values(pipeline.tasks)) {
     for (const dependency of taskDefinition.dependsOn) {
@@ -736,6 +781,7 @@ export function validatePipeline(pipeline: NormalizedPipeline): void {
         throw new Error(`Job "${jobDefinition.id}" references missing trigger "${triggerId}".`);
       }
     }
+    validateJobRunsOn(jobDefinition.id, jobDefinition.github);
   }
 
   validateSyncConfig(pipeline);

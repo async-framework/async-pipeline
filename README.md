@@ -16,6 +16,20 @@ Write the workflow in TypeScript, run it locally, and generate the thin GitHub A
 - Read pipeline metadata without cloning sources, running `prepare`, executing tasks, or evaluating deferred shell callbacks.
 - Keep GitHub Actions pinned, low-permission, and focused on invoking the local pipeline.
 
+## Syncs Without Taking Over
+
+`pipeline.ts` is the single source of truth, but GitHub Actions and `package.json` are never taken over — they receive only what you opt into through `sync`:
+
+```txt
+                 ┌─ run ──────▶  your laptop and CI, evidence under .async/
+ pipeline.ts ────┤
+ (the source)    └─ sync ─────▶  .github/workflows/async-pipeline.yml   (thin bootloader)
+                    opt-in,  ─▶  package.json scripts you select        (namespaced, locked)
+                    checked
+```
+
+GitHub Actions keeps triggers, runners, permissions, and secrets; it stops being where workflow logic lives. npm scripts stay readable aliases; sync writes only namespaced, lock-owned entries and fails on collisions instead of overwriting yours. `sync check` fails CI when either surface drifts from `pipeline.ts`, and leaving is two deletions: the `sync` block and the generated files. The full story: [docs/sync.md](docs/sync.md).
+
 ## Quick Start
 
 Try the repo's own pipeline (requires Node >= 24 on macOS or Linux; `pipeline.ts` loads natively):
@@ -376,6 +390,7 @@ Only `@async/pipeline` is published to npm. The other workspace packages are pri
 ## Docs
 
 - [Docs home](docs/index.md)
+- [Sync: choose what GitHub and npm see](docs/sync.md)
 - [Getting started](docs/getting-started.md)
 - [How it works](docs/how-it-works.md)
 - [Running locally](docs/local-runs.md)

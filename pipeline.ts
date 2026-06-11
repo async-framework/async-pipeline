@@ -51,6 +51,20 @@ export default definePipeline({
       cache: true,
       run: sh`pnpm drift:check`
     }),
+    claims: task({
+      description: "Claim coverage checks: every registered doc claim still exists verbatim and is enforced by a named test; every PROMISE test is registered.",
+      inputs: [
+        "tests/claims.json",
+        "scripts/check-claims.mjs",
+        "README.md",
+        "AGENTS.md",
+        "CHANGELOG.md",
+        "docs/api.md",
+        "tests/**/*.test.js"
+      ],
+      cache: true,
+      run: sh`pnpm claims:check`
+    }),
     build: task({
       inputs: ["production"],
       outputs: ["packages/*/dist/**"],
@@ -70,7 +84,7 @@ export default definePipeline({
       run: sh`pnpm test`
     }),
     pack: task({
-      dependsOn: ["test", "drift"],
+      dependsOn: ["test", "drift", "claims"],
       inputs: ["production", "package.json", "packages/*/package.json"],
       cache: false,
       run: sh`pnpm pack:check`

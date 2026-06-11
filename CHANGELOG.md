@@ -22,6 +22,7 @@
 - Auto-prune run records to the newest 50 after each run; configure with `ASYNC_PIPELINE_KEEP_RUNS` (`0` disables).
 - Find `pipeline.ts` from subdirectories by walking up to the config root.
 - Add product-promise invariant tests (`tests/invariants.test.js`), release-drift checks (`scripts/check-release-drift.mjs`, wired into `release:check` and the self pipeline's `drift` task), and `AGENTS.md` definition-of-done rules for coding agents.
+- Add an executable claim -> test coverage map: `tests/claims.json` registers documented claims with the tests that enforce them, and `scripts/check-claims.mjs` (wired into `release:check` and the self pipeline's `claims` task) fails on stale claim anchors, claims pointing at missing tests, and unregistered `PROMISE:` tests.
 
 ### Fixes
 
@@ -31,6 +32,12 @@
 - Never leave an execution record in `"running"`: unexpected scheduler errors finalize the record as failed.
 - Kill the whole process tree on task timeout (process-group SIGTERM, then SIGKILL) instead of only the wrapping shell.
 - Make the `publish` pipeline task idempotent: republishing an already-published version skips cleanly instead of failing.
+- Forward SIGINT/SIGTERM to running task process groups (escalating to SIGKILL), skip retries, finalize the execution record, and exit `130`/`143`, so interrupting the CLI never orphans task processes or leaves a record `"running"`.
+- Write execution records, cache results, output manifests, and logs atomically (write, fsync, then rename) so a crash cannot leave truncated state files.
+- Cap in-memory task output buffers at 8 MiB per stream, byte-accurate (override with `ASYNC_PIPELINE_MAX_LOG_BYTES`, `0` = unlimited); logs keep the tail with a truncation marker instead of exhausting memory.
+- Fail fast with `ASYNC_PIPELINE_INPUT_CYCLE` on `namedInputs` cycles instead of overflowing the call stack.
+- Hash input files through streams so accidentally huge inputs cannot exhaust memory during cache-key computation.
+- Terminate running tasks, finalize the run record, and exit `141` (128 + SIGPIPE) when CLI output is piped to a closed reader (EPIPE), instead of crashing or orphaning task processes.
 
 ### API Changes
 

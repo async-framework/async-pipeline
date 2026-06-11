@@ -1,0 +1,217 @@
+{
+  "$comment": "Claim -> test map enforced by scripts/check-claims.mjs (AGENTS.md rule 2). Each anchor must appear verbatim in its source file, and every listed test title must exist in tests/*.test.js. Every test titled 'PROMISE: ...' must be registered here. When you add a behavioral claim to README.md, docs/, AGENTS.md, or CHANGELOG.md, register it; when you soften or remove a claim, update or remove its entry.",
+  "claims": [
+    {
+      "id": "readme.parallel-scheduler",
+      "source": "README.md",
+      "anchor": "The scheduler starts ready tasks in deterministic graph order and runs independent tasks in parallel up to the configured concurrency.",
+      "tests": [
+        "runJob schedules ready tasks in parallel up to concurrency",
+        "orders tasks deterministically with dependencies before dependents"
+      ]
+    },
+    {
+      "id": "readme.force-rerun",
+      "source": "README.md",
+      "anchor": "`--force` re-runs tasks while still recording fresh cache entries",
+      "tests": ["force re-runs cached tasks and refreshes the cache entry"]
+    },
+    {
+      "id": "readme.dry-run-plan",
+      "source": "README.md",
+      "anchor": "`--dry-run` prints the plan with predicted cache hits without executing",
+      "tests": ["planJob predicts cache hits without executing tasks"]
+    },
+    {
+      "id": "readme.cache-clear-gc",
+      "source": "README.md",
+      "anchor": "`cache clear` resets the task cache, and `gc` prunes old run records",
+      "tests": ["cache clear and gc maintain local pipeline state"]
+    },
+    {
+      "id": "readme.run-auto-prune",
+      "source": "README.md",
+      "anchor": "Runs also auto-prune to the newest 50 records; set `ASYNC_PIPELINE_KEEP_RUNS` to change the limit or `0` to disable.",
+      "tests": ["run auto-prunes records, emits json, and finds config from subdirectories"]
+    },
+    {
+      "id": "readme.log-cap",
+      "source": "README.md",
+      "anchor": "Task output buffers cap at 8 MiB per stream (`ASYNC_PIPELINE_MAX_LOG_BYTES`, `0` = unlimited); stored logs keep the tail.",
+      "tests": ["task logs are capped by ASYNC_PIPELINE_MAX_LOG_BYTES with a truncation marker"]
+    },
+    {
+      "id": "readme.config-walk-up",
+      "source": "README.md",
+      "anchor": "The CLI finds `pipeline.ts` from any subdirectory by walking up.",
+      "tests": ["run auto-prunes records, emits json, and finds config from subdirectories"]
+    },
+    {
+      "id": "readme.cache-inputs-explicit",
+      "source": "README.md",
+      "anchor": "Make cache behavior explicit through declared task inputs, cache refs, and task config.",
+      "tests": [
+        "PROMISE: per-task inputs isolate cache invalidation",
+        "glob inputs are resolved deterministically and included in cache keys",
+        "rejects unknown cache stores and policies"
+      ]
+    },
+    {
+      "id": "readme.metadata-without-execution",
+      "source": "README.md",
+      "anchor": "Read pipeline metadata without cloning sources, running `prepare`, executing tasks, or evaluating deferred shell callbacks.",
+      "tests": [
+        "CLI exposes metadata, matrix, source list, source sync, and namespaced run-task",
+        "normalizes sources and allows declared external task refs as metadata"
+      ]
+    },
+    {
+      "id": "readme.generated-workflow",
+      "source": "README.md",
+      "anchor": "Generate and check a pinned GitHub Actions workflow from `pipeline.ts`.",
+      "tests": [
+        "github generate writes a current workflow and lock",
+        "renders github workflow triggers and bootloader steps"
+      ]
+    },
+    {
+      "id": "readme.sync-conflict",
+      "source": "README.md",
+      "anchor": "If a generated command exists but is not claimed by the lock, it fails with `ASYNC_PIPELINE_SYNC_CONFLICT`.",
+      "tests": [
+        "resolves package-name targets and rejects unmanaged conflicts",
+        "detects stale synced task manifests and locks"
+      ]
+    },
+    {
+      "id": "readme.source-prepare",
+      "source": "README.md",
+      "anchor": "`prepare` runs inside that source checkout before source tasks run.",
+      "tests": ["runs a path source task with root-owned dynamic prepare and cache reuse"]
+    },
+    {
+      "id": "readme.namespaced-impact",
+      "source": "README.md",
+      "anchor": "Run many-repo impact checks with explicit dependent repos and namespaced task refs such as `storefront:test`.",
+      "tests": ["composes source pipeline tasks into a namespaced graph"]
+    },
+    {
+      "id": "api.workflow-dispatch-manual-only",
+      "source": "docs/api.md",
+      "anchor": "On `workflow_dispatch` only jobs with a `manual` trigger run implicitly",
+      "tests": ["matches github jobs from event context"]
+    },
+    {
+      "id": "agents.cache-key-scope",
+      "source": "AGENTS.md",
+      "anchor": "A task's cache key depends on the content of its own declared inputs, its dependencies' cache keys, and its resolved steps",
+      "tests": [
+        "PROMISE: per-task inputs isolate cache invalidation",
+        "dependency cache keys invalidate direct dependents",
+        "cache keys omit candidate fingerprints and absolute working directories"
+      ]
+    },
+    {
+      "id": "agents.second-run-cached",
+      "source": "AGENTS.md",
+      "anchor": "A second run of an unchanged pipeline is fully `cached`.",
+      "tests": ["PROMISE: a second run of an unchanged pipeline is fully cached"]
+    },
+    {
+      "id": "agents.outputs-restore-or-miss",
+      "source": "AGENTS.md",
+      "anchor": "A cache hit restores declared outputs, or downgrades to a recorded miss when it cannot.",
+      "tests": [
+        "file cache restores declared outputs on cache hit",
+        "result-only file cache entries for output tasks rerun and repopulate outputs"
+      ]
+    },
+    {
+      "id": "agents.prune-any-depth",
+      "source": "AGENTS.md",
+      "anchor": "`.git/`, `.async/`, and `node_modules/` are pruned from input walks at any depth.",
+      "tests": ["default pruning skips .git, .async, and node_modules at any depth"]
+    },
+    {
+      "id": "agents.secret-redaction",
+      "source": "AGENTS.md",
+      "anchor": "Resolved secret values never appear in echoed output or stored run logs.",
+      "tests": ["resolved secret values are redacted from stored task logs"]
+    },
+    {
+      "id": "agents.outputs-not-inputs",
+      "source": "AGENTS.md",
+      "anchor": "never on unrelated tasks' inputs, absolute machine paths, or the task's own outputs",
+      "tests": [
+        "PROMISE: declared outputs do not feed back into a task's own cache inputs",
+        "cache inputs ignore local state directories and declared outputs"
+      ]
+    },
+    {
+      "id": "changelog.signal-no-orphans",
+      "source": "CHANGELOG.md",
+      "anchor": "interrupting the CLI never orphans task processes",
+      "tests": ["PROMISE: interrupting the CLI terminates running task processes"]
+    },
+    {
+      "id": "changelog.epipe-shutdown",
+      "source": "CHANGELOG.md",
+      "anchor": "when CLI output is piped to a closed reader (EPIPE)",
+      "tests": ["PROMISE: a closed output pipe terminates tasks and finalizes the run"]
+    },
+    {
+      "id": "changelog.streamed-plan",
+      "source": "CHANGELOG.md",
+      "anchor": "Stream CLI progress (plan and per-task status) while a run is executing",
+      "tests": ["PROMISE: the CLI streams the plan before task output and prefixes task lines"]
+    },
+    {
+      "id": "changelog.input-cycle",
+      "source": "CHANGELOG.md",
+      "anchor": "Fail fast with `ASYNC_PIPELINE_INPUT_CYCLE` on `namedInputs` cycles",
+      "tests": ["named input cycles fail fast at definePipeline time"]
+    },
+    {
+      "id": "changelog.timeout-kills-tree",
+      "source": "CHANGELOG.md",
+      "anchor": "Kill the whole process tree on task timeout",
+      "tests": ["task timeout fails the execution and records the error"]
+    },
+    {
+      "id": "changelog.docker-env-allowlist",
+      "source": "CHANGELOG.md",
+      "anchor": "Docker workspaces now forward only pipeline-defined env",
+      "tests": ["docker commands forward only allowlisted env keys"]
+    },
+    {
+      "id": "changelog.require-environment",
+      "source": "CHANGELOG.md",
+      "anchor": "`command.requireEnvironment(...)` is enforced",
+      "tests": ["requireEnvironment command policy denies unless ASYNC_PIPELINE_ENVIRONMENT matches"]
+    },
+    {
+      "id": "changelog.atomic-state-writes",
+      "source": "CHANGELOG.md",
+      "anchor": "Write execution records, cache results, output manifests, and logs atomically",
+      "tests": ["writeFileAtomic publishes complete files and leaves no temp files behind"]
+    },
+    {
+      "id": "changelog.never-running-record",
+      "source": "CHANGELOG.md",
+      "anchor": "Never leave an execution record in `\"running\"`",
+      "tests": [
+        "a throwing deferred step factory fails the task and finalizes the record",
+        "PROMISE: a closed output pipe terminates tasks and finalizes the run"
+      ]
+    },
+    {
+      "id": "changelog.env-fail-fast",
+      "source": "CHANGELOG.md",
+      "anchor": "missing variables, or unmapped variable values fail before shell commands run",
+      "tests": [
+        "job env secrets fail before execution when missing",
+        "mapped env vars fail before execution when unmapped"
+      ]
+    }
+  ]
+}

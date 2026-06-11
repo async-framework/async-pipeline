@@ -105,6 +105,68 @@ test("renders github job environment and secret env wiring", async () => {
   }
 });
 
+test("renders github job packages, issues, and pull-requests permissions with a contents fallback", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "async-pipeline-github-permissions-"));
+  try {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ packageManager: "pnpm@10.20.0" }), "utf8");
+    const pipeline = definePipeline({
+      name: "test",
+      triggers: {
+        pr: trigger.github({ events: ["pull_request"] })
+      },
+      tasks: {
+        preview: task({ run: sh`node scripts/publish-github.mjs pr` })
+      },
+      jobs: {
+        preview: job({
+          target: "preview",
+          trigger: ["pr"],
+          env: {
+            GITHUB_TOKEN: env.secret("GITHUB_TOKEN")
+          },
+          github: {
+            permissions: {
+              issues: "write",
+              packages: "write",
+              pullRequests: "read"
+            }
+          }
+        })
+      }
+    });
+
+    const rendered = await renderGitHubWorkflow(pipeline, { cwd: dir, configPath: join(dir, "pipeline.ts") });
+
+    // Job-level permissions replace the workflow defaults, so contents: read
+    // must be restated automatically or checkout loses repo access.
+    assert.match(
+      rendered.workflow,
+      /permissions:\n      contents: read\n      issues: write\n      packages: write\n      pull-requests: read/
+    );
+    assert.match(rendered.workflow, /GITHUB_TOKEN: \$\{\{ secrets\.GITHUB_TOKEN \}\}/);
+    assert.doesNotMatch(rendered.workflow, /id-token/);
+  } finally {
+    rmSync(dir, { force: true, recursive: true });
+  }
+});
+
+test("rejects unknown github permission fields", () => {
+  assert.throws(
+    () =>
+      definePipeline({
+        name: "test",
+        tasks: { verify: task({ run: sh`echo verify` }) },
+        jobs: {
+          verify: job({
+            target: "verify",
+            github: { permissions: { packges: "write" } }
+          })
+        }
+      }),
+    (error) => error.code === "ASYNC_PIPELINE_UNKNOWN_FIELD" && /packges/.test(error.message)
+  );
+});
+
 test("renders github job runner labels and runner matrices", async () => {
   const dir = await mkdtemp(join(tmpdir(), "async-pipeline-github-runners-"));
   try {

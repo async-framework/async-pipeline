@@ -328,6 +328,12 @@ export interface GitHubJobConfig {
   permissions?: {
     contents?: GitHubPermission;
     idToken?: "write" | "none";
+    /** Renders `issues: <value>` (issue comments need `write`). */
+    issues?: GitHubPermission;
+    /** Renders `packages: <value>` (GitHub Packages publishing needs `write`). */
+    packages?: GitHubPermission;
+    /** Renders `pull-requests: <value>` (commenting on a PR needs `write`). */
+    pullRequests?: GitHubPermission;
   };
   /**
    * Runner for the generated GitHub Actions job. A string targets a hosted
@@ -581,6 +587,7 @@ const PIPELINE_FIELDS = new Set(["name", "env", "commands", "sandboxes", "cache"
 const TASK_FIELDS = new Set(["description", "dependsOn", "inputs", "outputs", "cache", "retry", "timeout", "requires", "run", "steps"]);
 const JOB_FIELDS = new Set(["description", "target", "trigger", "environment", "env", "requires", "github"]);
 const GITHUB_JOB_FIELDS = new Set(["environment", "permissions", "runsOn", "runsOnMatrix"]);
+const GITHUB_PERMISSION_FIELDS = new Set(["contents", "idToken", "issues", "packages", "pullRequests"]);
 
 function rejectUnknownFields(known: Set<string>, value: object, where: string): void {
   for (const key of Object.keys(value)) {
@@ -610,6 +617,9 @@ function validateDefinitionShape(definition: PipelineDefinition): void {
     rejectUnknownFields(JOB_FIELDS, jobDefinition, `Job "${id}"`);
     if (jobDefinition.github) {
       rejectUnknownFields(GITHUB_JOB_FIELDS, jobDefinition.github, `Job "${id}" github config`);
+      if (jobDefinition.github.permissions) {
+        rejectUnknownFields(GITHUB_PERMISSION_FIELDS, jobDefinition.github.permissions, `Job "${id}" github permissions`);
+      }
     }
   }
 }

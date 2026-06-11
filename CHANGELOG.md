@@ -29,6 +29,7 @@
 - Add product-promise invariant tests (`tests/invariants.test.js`), release-drift checks (`scripts/check-release-drift.mjs`, wired into `release:check` and the self pipeline's `drift` task), and `AGENTS.md` definition-of-done rules for coding agents.
 - Add an executable claim -> test coverage map: `tests/claims.json` registers documented claims with the tests that enforce them, and `scripts/check-claims.mjs` (wired into `release:check` and the self pipeline's `claims` task) fails on stale claim anchors, claims pointing at missing tests, and unregistered `PROMISE:` tests.
 - Add `github.runsOn` and `github.runsOnMatrix` job options so generated GitHub Actions jobs can target hosted runners, self-hosted label sets, or a runner matrix.
+- Add `github.permissions.issues`, `github.permissions.packages`, and `github.permissions.pullRequests` job options for generated GitHub Actions jobs that publish packages or comment on PRs. When a job grants any permission, the generator restates `contents: read` automatically (job-level permissions replace the workflow defaults). Unknown permission fields fail with `ASYNC_PIPELINE_UNKNOWN_FIELD`.
 - Have `doctor` warn about unreadable run directories and stale `"running"` records.
 
 ### Fixes

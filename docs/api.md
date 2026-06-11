@@ -383,6 +383,8 @@ Fields:
 | `env` | Runtime environment for this job. Job env overrides pipeline env by key. |
 | `github` | Optional generated GitHub Actions job config for platform environment and permissions. |
 
+`github.permissions` accepts `contents`, `idToken`, `issues`, `packages`, and `pullRequests` (`pullRequests` renders as `pull-requests`). When a job grants any permission, the generator restates `contents: read` unless you set `contents` yourself, because job-level permissions replace the workflow defaults. Unknown permission fields fail with `ASYNC_PIPELINE_UNKNOWN_FIELD`.
+
 See [`env`](#env) for local, GitHub Actions, and test behavior.
 
 ## trigger

@@ -272,12 +272,21 @@ function renderJob(lines: string[], model: ReturnType<typeof buildRenderModel>, 
   if (environment) {
     renderGitHubEnvironment(lines, environment);
   }
-  const idToken = job.github?.permissions?.idToken ?? (job.requires?.provenance ? "write" as const : undefined);
-  const contents = job.github?.permissions?.contents ?? (idToken ? "read" : undefined);
-  if (contents || idToken) {
+  const grants = job.github?.permissions;
+  const idToken = grants?.idToken ?? (job.requires?.provenance ? "write" as const : undefined);
+  const issues = grants?.issues;
+  const packages = grants?.packages;
+  const pullRequests = grants?.pullRequests;
+  // Job-level permissions replace the workflow default set, so any grant must
+  // restate contents: read or checkout loses repo access.
+  const contents = grants?.contents ?? ((idToken || issues || packages || pullRequests) ? "read" : undefined);
+  if (contents || idToken || issues || packages || pullRequests) {
     lines.push("    permissions:");
     if (contents) lines.push(`      contents: ${contents}`);
     if (idToken) lines.push(`      id-token: ${idToken}`);
+    if (issues) lines.push(`      issues: ${issues}`);
+    if (packages) lines.push(`      packages: ${packages}`);
+    if (pullRequests) lines.push(`      pull-requests: ${pullRequests}`);
   }
   lines.push(
     "    steps:",

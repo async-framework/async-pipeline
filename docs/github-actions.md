@@ -291,6 +291,37 @@ permissions:
 
 Add write permissions only when a pipeline publishes, comments, deploys, or uploads privileged artifacts.
 
+Per-job grants come from `github.permissions` on the job. Supported fields are `contents`, `idToken`, `issues`, `packages`, and `pullRequests`; unknown fields are rejected with `ASYNC_PIPELINE_UNKNOWN_FIELD`:
+
+```ts
+job({
+  target: "preview",
+  trigger: ["pr"],
+  env: { GITHUB_TOKEN: env.secret("GITHUB_TOKEN") },
+  github: {
+    permissions: {
+      issues: "write",
+      packages: "write",
+      pullRequests: "write"
+    }
+  }
+});
+```
+
+renders:
+
+```yaml
+permissions:
+  contents: read
+  issues: write
+  packages: write
+  pull-requests: write
+```
+
+Commenting on a pull request with `GITHUB_TOKEN` routes through `pullRequests: "write"` even when the call uses the issues comments API.
+
+Job-level permissions replace the workflow defaults, so the generator restates `contents: read` automatically whenever a job grants anything else; checkout keeps repo access without you remembering to add it.
+
 ## Many-Repo Matrix
 
 GitHub triggers still come from YAML, but dynamic matrices can be produced after the workflow starts:

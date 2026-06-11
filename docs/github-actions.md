@@ -31,6 +31,19 @@ export default definePipeline({
 });
 ```
 
+## Workflow Options
+
+The generated workflow installs Node 24 by default and restores the local task cache (`.async/cache`) through a pinned `actions/cache` step keyed by commit with an OS-prefixed fallback, so unchanged tasks resolve as `cached` in CI. Both knobs live in `sync.github`:
+
+```ts
+sync: {
+  github: {
+    nodeVersion: 24,
+    cache: true
+  }
+}
+```
+
 ## Generate The Bootloader
 
 ```sh

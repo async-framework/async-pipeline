@@ -7,7 +7,8 @@ import { pipelineError } from "@async/pipeline-core";
 
 export const GITHUB_WORKFLOW_PATH = ".github/workflows/async-pipeline.yml";
 export const GITHUB_LOCK_PATH = ".github/async-pipeline.lock.json";
-const GENERATOR_VERSION = 1;
+const GENERATOR_VERSION = 2;
+const DEFAULT_NODE_VERSION = "24";
 
 export interface GitHubRenderOptions {
   cwd: string;
@@ -27,6 +28,8 @@ export interface GitHubLock {
   jobs: Array<{ id: string; target: string[]; trigger: string[]; env: Record<string, EnvValue>; environment?: JobEnvironment; requires?: JobRequirements; github?: GitHubJobConfig; if?: string }>;
   packageManager: string;
   buildCommand?: string;
+  nodeVersion: string;
+  taskCache: boolean;
 }
 
 export interface GitHubRenderResult {
@@ -63,7 +66,9 @@ export async function renderGitHubWorkflow(pipeline: NormalizedPipeline, options
     triggers: renderModel.triggers,
     jobs: renderModel.jobs,
     packageManager: renderModel.packageManager,
-    buildCommand: renderModel.buildCommand
+    buildCommand: renderModel.buildCommand,
+    nodeVersion: renderModel.nodeVersion,
+    taskCache: renderModel.taskCache
   });
   const lock: GitHubLock = {
     version: GENERATOR_VERSION,
@@ -75,7 +80,9 @@ export async function renderGitHubWorkflow(pipeline: NormalizedPipeline, options
     triggers: renderModel.triggers,
     jobs: renderModel.jobs,
     packageManager: renderModel.packageManager,
-    buildCommand: renderModel.buildCommand
+    buildCommand: renderModel.buildCommand,
+    nodeVersion: renderModel.nodeVersion,
+    taskCache: renderModel.taskCache
   };
   return {
     workflowPath,
@@ -139,7 +146,11 @@ export async function readGitHubEventContext(env: NodeJS.ProcessEnv): Promise<Gi
 
 export function jobsForGitHubEvent(pipeline: NormalizedPipeline, context: GitHubEventContext): NormalizedJob[] {
   if (context.eventName === "workflow_dispatch") {
-    return Object.values(pipeline.jobs).sort((left, right) => left.id.localeCompare(right.id));
+    // Dispatch is not "run everything": only jobs that declare a manual trigger
+    // run implicitly. Anything else must be selected explicitly (github run --job).
+    return Object.values(pipeline.jobs)
+      .filter((job) => job.trigger.some((triggerId) => pipeline.triggers[triggerId]?.type === "manual"))
+      .sort((left, right) => left.id.localeCompare(right.id));
   }
 
   const matches: NormalizedJob[] = [];
@@ -179,7 +190,9 @@ function buildRenderModel(
       }))
       .sort((left, right) => left.id.localeCompare(right.id)),
     packageManager: options.packageManager,
-    buildCommand: options.buildCommand
+    buildCommand: options.buildCommand,
+    nodeVersion: pipeline.sync.github.nodeVersion ?? DEFAULT_NODE_VERSION,
+    taskCache: pipeline.sync.github.cache ?? true
   };
 }
 
@@ -255,10 +268,22 @@ function renderJob(lines: string[], model: ReturnType<typeof buildRenderModel>, 
     "      - name: Checkout",
     "        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2",
     "",
+    ...(model.taskCache
+      ? [
+          "      - name: Restore task cache",
+          "        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4",
+          "        with:",
+          "          path: .async/cache",
+          "          key: async-pipeline-${{ runner.os }}-${{ github.sha }}",
+          "          restore-keys: |",
+          "            async-pipeline-${{ runner.os }}-",
+          ""
+        ]
+      : []),
     "      - name: Setup Node",
     "        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6",
     "        with:",
-    "          node-version: 24",
+    `          node-version: ${model.nodeVersion}`,
     "          registry-url: https://registry.npmjs.org/",
     "          package-manager-cache: false",
     "",

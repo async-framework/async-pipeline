@@ -113,21 +113,24 @@ test("matches github jobs from event context", () => {
       release: trigger.github({ events: ["push"], branches: ["release/*"] }),
       docs: trigger.github({ events: ["push"], branches: ["docs"] }),
       published: trigger.github({ events: ["release"] }),
-      nightly: trigger.cron("17 2 * * *")
+      nightly: trigger.cron("17 2 * * *"),
+      manual: trigger.manual()
     },
     tasks: {
       verify: task({ run: sh`echo verify` }),
       docs: task({ run: sh`echo docs` }),
       release: task({ run: sh`echo release` }),
       published: task({ run: sh`echo published` }),
-      nightly: task({ run: sh`echo nightly` })
+      nightly: task({ run: sh`echo nightly` }),
+      deploy: task({ run: sh`echo deploy` })
     },
     jobs: {
       verify: job({ target: "verify", trigger: ["main"] }),
       release: job({ target: "release", trigger: ["release"] }),
       docs: job({ target: "docs", trigger: ["docs"] }),
       published: job({ target: "published", trigger: ["published"] }),
-      nightly: job({ target: "nightly", trigger: ["nightly"] })
+      nightly: job({ target: "nightly", trigger: ["nightly"] }),
+      deploy: job({ target: "deploy", trigger: ["manual"] })
     }
   });
 
@@ -135,7 +138,9 @@ test("matches github jobs from event context", () => {
   assert.deepEqual(jobsForGitHubEvent(pipeline, { eventName: "push", ref: "refs/heads/release/1.0" }).map((entry) => entry.id), ["release"]);
   assert.deepEqual(jobsForGitHubEvent(pipeline, { eventName: "release" }).map((entry) => entry.id), ["published"]);
   assert.deepEqual(jobsForGitHubEvent(pipeline, { eventName: "schedule", schedule: "17 2 * * *" }).map((entry) => entry.id), ["nightly"]);
-  assert.deepEqual(jobsForGitHubEvent(pipeline, { eventName: "workflow_dispatch" }).map((entry) => entry.id), ["docs", "nightly", "published", "release", "verify"]);
+  // workflow_dispatch runs only jobs with a manual trigger; everything else
+  // needs explicit selection (github run --job <id>).
+  assert.deepEqual(jobsForGitHubEvent(pipeline, { eventName: "workflow_dispatch" }).map((entry) => entry.id), ["deploy"]);
 });
 
 test("github generate writes a current workflow and lock", () => {

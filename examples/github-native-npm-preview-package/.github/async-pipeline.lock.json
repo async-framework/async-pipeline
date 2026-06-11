@@ -1,10 +1,10 @@
 {
-  "version": 1,
+  "version": 2,
   "generator": "@async/pipeline",
   "config": "pipeline.mjs",
   "workflow": ".github/workflows/async-pipeline.yml",
-  "hash": "sha256:cb55656764164130b72110c824b9903796ae5acb94addbc9f002fa1af525b507",
-  "generatedAt": "2026-06-10T10:33:42.720Z",
+  "hash": "sha256:71f0ae0944c1d720306d575d4afff3efa3169292df9af699f7320c45e77a7514",
+  "generatedAt": "2026-06-11T05:13:09.295Z",
   "triggers": {
     "pull_request": {},
     "push": {
@@ -24,7 +24,9 @@
       "trigger": [
         "main",
         "manual"
-      ]
+      ],
+      "env": {},
+      "if": "(github.event_name == 'push' && (github.ref == 'refs/heads/main')) || (github.event_name == 'workflow_dispatch')"
     },
     {
       "id": "prPreview",
@@ -34,7 +36,9 @@
       "trigger": [
         "pr",
         "manual"
-      ]
+      ],
+      "env": {},
+      "if": "(github.event_name == 'pull_request') || (github.event_name == 'workflow_dispatch')"
     },
     {
       "id": "stableRelease",
@@ -44,8 +48,12 @@
       "trigger": [
         "release",
         "manual"
-      ]
+      ],
+      "env": {},
+      "if": "(github.event_name == 'release') || (github.event_name == 'workflow_dispatch')"
     }
   ],
-  "packageManager": "pnpm"
+  "packageManager": "pnpm",
+  "nodeVersion": "24",
+  "taskCache": true
 }

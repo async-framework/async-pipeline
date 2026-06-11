@@ -218,6 +218,8 @@ export type SyncTargets = "root" | SyncTargetSelector[];
 export interface GitHubSyncConfig {
   workflow?: string;
   lock?: string;
+  nodeVersion?: number | string;
+  cache?: boolean;
 }
 
 export type GitHubSyncInput = boolean | GitHubSyncConfig;
@@ -242,6 +244,8 @@ export interface NormalizedGitHubSyncConfig {
   enabled: boolean;
   workflow: string;
   lock: string;
+  nodeVersion: string;
+  cache: boolean;
 }
 
 export interface NormalizedTaskSyncConfig {
@@ -278,8 +282,6 @@ export interface TaskDefinition {
   environment?: PipelineEnvironment;
   run?: TaskRunDefinition;
   steps?: TaskRunItem[];
-  continuous?: boolean;
-  with?: TaskId[];
 }
 
 export type TaskRunItem = TaskStep | TaskDirective;
@@ -712,11 +714,6 @@ export function validatePipeline(pipeline: NormalizedPipeline): void {
         throw new Error(`Task "${taskDefinition.id}" depends on missing task "${dependency}".`);
       }
     }
-    for (const companion of taskDefinition.with ?? []) {
-      if (!pipeline.tasks[companion] && !isKnownExternalTaskRef(pipeline, companion)) {
-        throw new Error(`Task "${taskDefinition.id}" references missing companion task "${companion}".`);
-      }
-    }
     if (taskDefinition.cache.enabled && taskDefinition.cache.store) {
       assertCacheStore(pipeline.cache, parseCacheRef(cacheRefFromStoreOptions(taskDefinition.cache, pipeline.cache.default)));
     }
@@ -763,7 +760,6 @@ export function composePipelines(
         ...taskDefinition,
         id: namespacedId,
         dependsOn: taskDefinition.dependsOn.map((dependency) => namespaceTaskRef(sourceId, dependency)),
-        with: taskDefinition.with?.map((companion) => namespaceTaskRef(sourceId, companion)),
         steps: [...taskDefinition.steps],
         inputs: [...taskDefinition.inputs],
         outputs: [...taskDefinition.outputs],
@@ -988,26 +984,43 @@ function normalizeSync(sync: PipelineDefinition["sync"]): NormalizedPipelineSync
   };
 }
 
+const DEFAULT_GITHUB_NODE_VERSION = "24";
+
 function normalizeGitHubSync(github: GitHubSyncInput | undefined): NormalizedGitHubSyncConfig {
   if (github === undefined || github === false) {
     return {
       enabled: false,
       workflow: ".github/workflows/async-pipeline.yml",
-      lock: ".github/async-pipeline.lock.json"
+      lock: ".github/async-pipeline.lock.json",
+      nodeVersion: DEFAULT_GITHUB_NODE_VERSION,
+      cache: true
     };
   }
   if (github === true) {
     return {
       enabled: true,
       workflow: ".github/workflows/async-pipeline.yml",
-      lock: ".github/async-pipeline.lock.json"
+      lock: ".github/async-pipeline.lock.json",
+      nodeVersion: DEFAULT_GITHUB_NODE_VERSION,
+      cache: true
     };
   }
   return {
     enabled: true,
     workflow: github.workflow ?? ".github/workflows/async-pipeline.yml",
-    lock: github.lock ?? ".github/async-pipeline.lock.json"
+    lock: github.lock ?? ".github/async-pipeline.lock.json",
+    nodeVersion: normalizeGitHubNodeVersion(github.nodeVersion),
+    cache: github.cache ?? true
   };
+}
+
+function normalizeGitHubNodeVersion(nodeVersion: number | string | undefined): string {
+  if (nodeVersion === undefined) return DEFAULT_GITHUB_NODE_VERSION;
+  const normalized = String(nodeVersion).trim();
+  if (!/^\d+(?:\.\d+){0,2}$/.test(normalized)) {
+    throw pipelineError("ASYNC_PIPELINE_SYNC_INVALID_NODE_VERSION", `Invalid GitHub sync nodeVersion "${nodeVersion}". Use a version like 24 or 24.1.0.`);
+  }
+  return normalized;
 }
 
 function normalizeTaskSync(tasks: TaskSyncInput | undefined): NormalizedTaskSyncConfig {

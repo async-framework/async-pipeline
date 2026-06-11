@@ -1,5 +1,64 @@
 # Changelog
 
+## 0.2.0 - 2026-06-11
+
+### Breaking
+
+- Require Node `>= 24`. `pipeline.ts` loads through native type stripping; the loader reports a clear error on older Node versions. (`engines` on 0.1.x incorrectly claimed `>=20`.)
+- Remove the inert task fields `with` and `continuous` from `TaskDefinition`.
+- `async-pipeline github run` on `workflow_dispatch` now runs only jobs with a `manual` trigger instead of every job. Select other jobs explicitly with `github run --job <id>`.
+- Docker workspaces now forward only pipeline-defined env, `ASYNC_PIPELINE_*` context, declared `requires.secrets`, and `CI` into containers instead of the entire host environment.
+- `command.requireEnvironment(...)` is enforced: the command fails unless `ASYNC_PIPELINE_ENVIRONMENT` matches the required name. Previously it silently allowed.
+
+### Features
+
+- Restore `.async/cache` in generated GitHub workflows through a pinned `actions/cache` step (`sync.github.cache`, default on), so unchanged tasks resolve as `cached` in CI.
+- Make the generated workflow Node version configurable with `sync.github.nodeVersion` (default `24`).
+- Add `run`/`run-task` `--force` (bypass cache reads while still writing fresh entries) and `--dry-run` (print the plan with predicted cache hits without executing).
+- Add `async-pipeline cache clear` and `async-pipeline gc [--keep <n>]` for task-cache and run-record maintenance.
+- Prefix live task output lines with `[task-id]` so parallel runs stay readable.
+- Stream CLI progress (plan and per-task status) while a run is executing instead of buffering it until the end.
+- Add `run --format json` and `run-task --format json` emitting the full execution record (and the plan under `--dry-run`).
+- Auto-prune run records to the newest 50 after each run; configure with `ASYNC_PIPELINE_KEEP_RUNS` (`0` disables).
+- Find `pipeline.ts` from subdirectories by walking up to the config root.
+- Add product-promise invariant tests (`tests/invariants.test.js`), release-drift checks (`scripts/check-release-drift.mjs`, wired into `release:check` and the self pipeline's `drift` task), and `AGENTS.md` definition-of-done rules for coding agents.
+
+### Fixes
+
+- Prune `.git/`, `.async/`, and `node_modules/` at any path depth during input resolution, not only at the repo root.
+- Redact resolved `env.secret(...)` and `requires.secrets` values from echoed task output and stored run logs.
+- Reuse existing source checkouts during runs without refetching or force-checkout when the declared ref is already resolved; `sources sync` remains the explicit refresh that discards local edits.
+- Never leave an execution record in `"running"`: unexpected scheduler errors finalize the record as failed.
+- Kill the whole process tree on task timeout (process-group SIGTERM, then SIGKILL) instead of only the wrapping shell.
+- Make the `publish` pipeline task idempotent: republishing an already-published version skips cleanly instead of failing.
+
+### API Changes
+
+- Export `planJob(...)` returning the execution order and predicted cache behavior for a job.
+- Add `.npmrc` with `engine-strict=true` so installs enforce the Node floor.
+- Pre-1.0 semver policy (see AGENTS.md): breaking changes bump the minor version; 0.1.5's breaking cache-ref rename in a patch is the counterexample this rule exists to prevent.
+
+## 0.1.5 - 2026-06-10
+
+### API Changes
+
+- Replace the legacy cache strategy API: cache refs now use store-prefixed policies such as `"file:local"` and `"memory:session"` instead of `"file:cache-first"`. This is a breaking change for pipeline configs that used strategy-style refs.
+
+## 0.1.4 - 2026-06-10
+
+### Features
+
+- Run independent ready tasks in parallel with a deterministic scheduler and `--concurrency <n>` (default: min of 4 and available cores).
+- Snapshot declared task `outputs` into the file cache with a sha256 manifest and restore them on cache hits; missing or corrupted outputs downgrade to a recorded cache miss.
+- Chain dependency cache keys into dependents so upstream changes invalidate downstream tasks without global fingerprint coupling.
+- Enforce task cache `ttlMs` when reading cache entries.
+- Add named `workspaces` config with `--workspace <id>` selection and pipeline-level command policies applied to CLI invocations.
+
+### Fixes
+
+- Stop hashing the global candidate fingerprint and absolute paths into per-task cache keys, so unrelated input changes no longer invalidate every task.
+- Exclude a task's own declared outputs from its input hashing to prevent self-invalidation.
+
 ## 0.1.3 - 2026-06-10
 
 ### Features

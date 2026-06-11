@@ -38,6 +38,19 @@ export default definePipeline({
     ]
   },
   tasks: {
+    drift: task({
+      description: "Release metadata drift checks: CHANGELOG entry, engines floor, workflow Node versions.",
+      inputs: [
+        "CHANGELOG.md",
+        "package.json",
+        "packages/*/package.json",
+        ".github/workflows/async-pipeline.yml",
+        "examples/*/.github/workflows/*.yml",
+        "scripts/check-release-drift.mjs"
+      ],
+      cache: true,
+      run: sh`pnpm drift:check`
+    }),
     build: task({
       inputs: ["production"],
       outputs: ["packages/*/dist/**"],
@@ -57,16 +70,16 @@ export default definePipeline({
       run: sh`pnpm test`
     }),
     pack: task({
-      dependsOn: ["test"],
+      dependsOn: ["test", "drift"],
       inputs: ["production", "package.json", "packages/*/package.json"],
       cache: false,
       run: sh`pnpm pack:check`
     }),
     publish: task({
       dependsOn: ["pack"],
-      inputs: ["production", "package.json", "packages/*/package.json"],
+      inputs: ["production", "package.json", "packages/*/package.json", "scripts/publish.mjs"],
       cache: false,
-      run: sh`cd packages/pipeline && npm publish --access public --registry https://registry.npmjs.org/ --provenance`
+      run: sh`node scripts/publish.mjs`
     })
   },
   jobs: {

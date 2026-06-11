@@ -1,0 +1,4 @@
+# GitHub Pages config for the docs site.
+# docs/goals holds internal working state and is not published.
+exclude:
+  - goals

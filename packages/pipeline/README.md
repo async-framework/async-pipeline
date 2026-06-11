@@ -6,6 +6,8 @@ Write the workflow in TypeScript, run it locally, and generate the thin GitHub A
 
 ## Install
 
+Requires Node `>= 24` (pipeline.ts loads through native TypeScript type stripping) on macOS or Linux.
+
 ```sh
 pnpm add -D @async/pipeline
 ```

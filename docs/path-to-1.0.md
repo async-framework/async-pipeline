@@ -15,6 +15,7 @@
 - The claims map (`tests/claims.json`) covers every README and api.md behavior claim, and `release:check` stays green on Linux and macOS in CI.
 - A decision on Windows: supported with tests, or explicitly out of scope in the README (today: untested, WSL recommended).
 - A decision on remote cache stores: shipped, or removed from metadata until a runtime exists.
+- A decision on Node-version matrices: today a library that verifies on Node 20/22 keeps a slim hand-maintained matrix workflow running package scripts directly (async-db does this), because the CLI itself requires Node >= 24. Either the CLI floor drops, the generator learns direct-command matrix jobs, or the exception gets blessed in the docs.
 - At least one external project using the package in CI whose breakage reports inform the final API pass.
 - One minor release with no breaking changes, demonstrating the surface has stopped moving.
 

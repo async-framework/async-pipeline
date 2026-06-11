@@ -342,7 +342,7 @@ interface RuntimeExecutionState {
 function cacheMiddleware<Input>(ref: CacheRef, executionState: RuntimeExecutionState): RuntimeMiddleware<Input> {
   const parsed = parseCacheRef(ref);
   return async (context, next) => {
-    const cacheKey = JSON.stringify([parsed.store, parsed.strategy, context.taskId, context.input]);
+    const cacheKey = JSON.stringify([parsed.store, parsed.policy, context.taskId, context.input]);
     if (parsed.store === "memory" && executionState.memoryCacheEntries.has(cacheKey)) {
       context.cacheHit = true;
       context.output = executionState.memoryCacheEntries.get(cacheKey);

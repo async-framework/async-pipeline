@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
-import { join, relative } from "node:path";
+import { copyFile, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { dirname, isAbsolute, join, relative } from "node:path";
 import type { CandidateContext, ExecutionRecord, NormalizedPipeline, NormalizedTask, TaskCacheOptions, TaskResult, TaskSourceContext, TaskStep } from "@async/pipeline-core";
 import { expandInputs } from "@async/pipeline-core";
 
@@ -10,6 +10,33 @@ export interface PipelineStore {
   runsDir: string;
   cacheDir: string;
   sourcesDir: string;
+}
+
+export interface TaskCacheKeyOptions {
+  steps?: TaskStep[];
+  candidate?: CandidateContext;
+  source?: TaskSourceContext;
+  prepareCommands?: string[];
+  dependencyFingerprints?: Record<string, string | null | undefined>;
+}
+
+export interface ResolvedFileOptions {
+  exclude?: readonly string[];
+  includeMissing?: boolean;
+  pruneDefaultDirs?: boolean;
+}
+
+export interface CacheOutputManifest {
+  version: 1;
+  generatedAt: string;
+  outputs: string[];
+  files: CacheOutputFile[];
+}
+
+export interface CacheOutputFile {
+  path: string;
+  size: number;
+  sha256: string;
 }
 
 export async function createStore(root: string): Promise<PipelineStore> {
@@ -45,17 +72,17 @@ export async function readCacheEntry(store: PipelineStore, cacheKey: string): Pr
   }
 }
 
-export async function writeCacheEntry(store: PipelineStore, cacheKey: string, result: TaskResult): Promise<void> {
+export async function writeCacheEntry(
+  store: PipelineStore,
+  cacheKey: string,
+  result: TaskResult,
+  outputOptions?: { cwd: string; outputs: readonly string[] }
+): Promise<CacheOutputManifest | null> {
   const cacheEntryDir = join(store.cacheDir, cacheKey);
   await mkdir(cacheEntryDir, { recursive: true });
   await writeFile(join(cacheEntryDir, "result.json"), `${JSON.stringify(result, null, 2)}\n`, "utf8");
-}
-
-export interface TaskCacheKeyOptions {
-  steps?: TaskStep[];
-  candidate?: CandidateContext;
-  source?: TaskSourceContext;
-  prepareCommands?: string[];
+  if (!outputOptions || outputOptions.outputs.length === 0) return null;
+  return writeCacheOutputs(store, cacheKey, outputOptions.cwd, outputOptions.outputs);
 }
 
 export async function computeTaskCacheKey(
@@ -68,9 +95,10 @@ export async function computeTaskCacheKey(
   hash.update(JSON.stringify({
     pipeline: pipeline.name,
     task: taskDefinition.id,
-    source: options.source ?? taskDefinition.source,
-    candidate: options.candidate,
-    prepareCommands: options.prepareCommands ?? [],
+    source: serializeSourceContext(options.source ?? taskDefinition.source),
+    candidate: serializeCandidateContext(options.candidate),
+    prepareCommands: (options.prepareCommands ?? []).map((command) => normalizeCommandForCacheKey(command, options)),
+    dependencyFingerprints: normalizeDependencyFingerprints(options.dependencyFingerprints),
     dependsOn: taskDefinition.dependsOn,
     inputs: taskDefinition.inputs,
     outputs: taskDefinition.outputs,
@@ -84,7 +112,7 @@ export async function computeTaskCacheKey(
   }));
 
   const expandedInputs = expandInputs(pipeline, taskDefinition.inputs);
-  const inputFiles = await resolveInputFiles(cwd, expandedInputs);
+  const inputFiles = await resolveInputFiles(cwd, expandedInputs, { exclude: taskDefinition.outputs });
 
   for (const input of expandedInputs) {
     hash.update(input);
@@ -130,28 +158,152 @@ export async function computeCandidateContext(pipeline: NormalizedPipeline, cwd:
   };
 }
 
-export async function resolveInputFiles(cwd: string, inputs: readonly string[]): Promise<string[]> {
+export function resolveInputFiles(cwd: string, inputs: readonly string[]): Promise<string[]>;
+export function resolveInputFiles(cwd: string, inputs: readonly string[], options: ResolvedFileOptions): Promise<string[]>;
+export async function resolveInputFiles(cwd: string, inputs: readonly string[], options?: ResolvedFileOptions): Promise<string[]> {
+  return resolveFiles(cwd, inputs, {
+    includeMissing: options?.includeMissing ?? true,
+    pruneDefaultDirs: options?.pruneDefaultDirs ?? true,
+    exclude: options?.exclude
+  });
+}
+
+export async function resolveOutputFiles(cwd: string, outputs: readonly string[]): Promise<string[]> {
+  return resolveFiles(cwd, outputs, {
+    includeMissing: false,
+    pruneDefaultDirs: false
+  });
+}
+
+export async function restoreCacheOutputs(store: PipelineStore, cacheKey: string, cwd: string, outputs: readonly string[]): Promise<boolean> {
+  const manifest = await readCacheOutputManifest(store, cacheKey);
+  if (!manifest || !sameStringList(manifest.outputs, [...outputs])) return false;
+
+  const outputDir = cacheOutputFilesDir(store, cacheKey);
+  for (const file of manifest.files) {
+    if (!isSafeRelativePath(file.path)) return false;
+    const cachedPath = join(outputDir, file.path);
+    let cachedStat;
+    try {
+      cachedStat = await stat(cachedPath);
+    } catch {
+      return false;
+    }
+    if (!cachedStat.isFile() || cachedStat.size !== file.size) return false;
+    if (await sha256File(cachedPath) !== file.sha256) return false;
+  }
+
+  for (const file of manifest.files) {
+    const destination = join(cwd, file.path);
+    await mkdir(dirname(destination), { recursive: true });
+    await copyFile(join(outputDir, file.path), destination);
+  }
+
+  return true;
+}
+
+export async function outputFilesExist(cwd: string, files: readonly string[]): Promise<boolean> {
+  for (const file of files) {
+    if (!isSafeRelativePath(file)) return false;
+    try {
+      const fileStat = await stat(join(cwd, file));
+      if (!fileStat.isFile()) return false;
+    } catch {
+      return false;
+    }
+  }
+  return true;
+}
+
+async function writeCacheOutputs(store: PipelineStore, cacheKey: string, cwd: string, outputs: readonly string[]): Promise<CacheOutputManifest> {
+  const outputDir = cacheOutputFilesDir(store, cacheKey);
+  await rm(outputDir, { force: true, recursive: true });
+  await mkdir(outputDir, { recursive: true });
+
+  const outputFiles = await resolveOutputFiles(cwd, outputs);
+  const files: CacheOutputFile[] = [];
+  for (const file of outputFiles) {
+    if (!isSafeRelativePath(file)) continue;
+    const source = join(cwd, file);
+    const destination = join(outputDir, file);
+    const fileStat = await stat(source);
+    if (!fileStat.isFile()) continue;
+    await mkdir(dirname(destination), { recursive: true });
+    await copyFile(source, destination);
+    files.push({
+      path: file,
+      size: fileStat.size,
+      sha256: await sha256File(source)
+    });
+  }
+
+  const manifest: CacheOutputManifest = {
+    version: 1,
+    generatedAt: new Date().toISOString(),
+    outputs: [...outputs],
+    files: files.sort((left, right) => left.path.localeCompare(right.path))
+  };
+  await writeFile(cacheOutputManifestPath(store, cacheKey), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+  return manifest;
+}
+
+async function readCacheOutputManifest(store: PipelineStore, cacheKey: string): Promise<CacheOutputManifest | null> {
+  try {
+    const parsed = JSON.parse(await readFile(cacheOutputManifestPath(store, cacheKey), "utf8")) as CacheOutputManifest;
+    if (parsed.version !== 1 || !Array.isArray(parsed.outputs) || !Array.isArray(parsed.files)) return null;
+    for (const file of parsed.files) {
+      if (typeof file.path !== "string" || typeof file.size !== "number" || typeof file.sha256 !== "string") return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function cacheOutputManifestPath(store: PipelineStore, cacheKey: string): string {
+  return join(store.cacheDir, cacheKey, "outputs.json");
+}
+
+function cacheOutputFilesDir(store: PipelineStore, cacheKey: string): string {
+  return join(store.cacheDir, cacheKey, "outputs");
+}
+
+async function resolveFiles(cwd: string, inputs: readonly string[], options: ResolvedFileOptions): Promise<string[]> {
   const includePatterns = inputs.filter((input) => !input.startsWith("!"));
-  const excludeMatchers = inputs
-    .filter((input) => input.startsWith("!"))
-    .map((input) => globToRegExp(input.slice(1)));
+  const excludePatterns = [
+    ...inputs.filter((input) => input.startsWith("!")).map((input) => input.slice(1)),
+    ...(options.exclude ?? [])
+  ];
+  const excludeMatchers = excludePatterns
+    .filter((input) => input.length > 0)
+    .flatMap(expandExcludePattern)
+    .map((input) => globToRegExp(input));
   const files = new Set<string>();
 
   for (const pattern of includePatterns) {
-    if (!pattern.includes("*")) {
-      const normalized = normalizePath(pattern);
+    const normalizedPattern = normalizePath(pattern);
+    if (isIgnoredPath(normalizedPattern, options)) continue;
+
+    if (!normalizedPattern.includes("*")) {
+      const normalized = normalizePath(normalizedPattern);
+      if (isIgnoredPath(normalized, options) || excludeMatchers.some((matcher) => matcher.test(normalized))) continue;
       try {
         const fileStat = await stat(join(cwd, normalized));
         if (fileStat.isFile()) files.add(normalized);
+        if (fileStat.isDirectory()) {
+          for (const file of await walkFiles(join(cwd, normalized), cwd, options)) {
+            files.add(file);
+          }
+        }
       } catch {
-        files.add(normalized);
+        if (options.includeMissing ?? true) files.add(normalized);
       }
       continue;
     }
 
-    const baseDir = baseDirectoryForGlob(pattern);
-    const matcher = globToRegExp(pattern);
-    for (const file of await walkFiles(join(cwd, baseDir), cwd)) {
+    const baseDir = baseDirectoryForGlob(normalizedPattern);
+    const matcher = globToRegExp(normalizedPattern);
+    for (const file of await walkFiles(join(cwd, baseDir), cwd, options)) {
       if (matcher.test(file)) files.add(file);
     }
   }
@@ -161,7 +313,10 @@ export async function resolveInputFiles(cwd: string, inputs: readonly string[]):
     .sort((left, right) => left.localeCompare(right));
 }
 
-async function walkFiles(dir: string, cwd: string): Promise<string[]> {
+async function walkFiles(dir: string, cwd: string, options: ResolvedFileOptions): Promise<string[]> {
+  const relativeDir = normalizePath(relative(cwd, dir));
+  if (relativeDir && relativeDir !== "." && isIgnoredPath(relativeDir, options)) return [];
+
   let entries;
   try {
     entries = await readdir(dir, { withFileTypes: true });
@@ -172,13 +327,89 @@ async function walkFiles(dir: string, cwd: string): Promise<string[]> {
   const files: string[] = [];
   for (const entry of entries) {
     const absolutePath = join(dir, entry.name);
+    const relativePath = normalizePath(relative(cwd, absolutePath));
+    if (isIgnoredPath(relativePath, options)) continue;
     if (entry.isDirectory()) {
-      files.push(...await walkFiles(absolutePath, cwd));
+      files.push(...await walkFiles(absolutePath, cwd, options));
     } else if (entry.isFile()) {
-      files.push(normalizePath(relative(cwd, absolutePath)));
+      files.push(relativePath);
     }
   }
   return files;
+}
+
+function expandExcludePattern(pattern: string): string[] {
+  const normalized = normalizePath(pattern);
+  if (normalized.endsWith("/**")) return [normalized];
+  if (normalized.endsWith("/")) return [`${normalized}**`];
+  if (normalized.includes("*")) return [normalized];
+  return [normalized, `${normalized}/**`];
+}
+
+function isIgnoredPath(path: string, options: ResolvedFileOptions): boolean {
+  if (options.pruneDefaultDirs === false) return false;
+  const normalized = normalizePath(path);
+  if (!normalized || normalized === ".") return false;
+  const first = normalized.split("/")[0];
+  return first === ".git" || first === ".async" || first === "node_modules";
+}
+
+async function sha256File(path: string): Promise<string> {
+  return createHash("sha256").update(await readFile(path)).digest("hex");
+}
+
+function sameStringList(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function isSafeRelativePath(path: string): boolean {
+  const normalized = normalizePath(path);
+  return Boolean(normalized)
+    && !isAbsolute(normalized)
+    && normalized !== ".."
+    && !normalized.startsWith("../")
+    && !normalized.includes("/../");
+}
+
+function serializeCandidateContext(candidate: CandidateContext | undefined): unknown {
+  if (!candidate) return undefined;
+  return {
+    commit: candidate.commit,
+    ref: candidate.ref,
+    dirty: candidate.dirty
+  };
+}
+
+function serializeSourceContext(source: TaskSourceContext | undefined): unknown {
+  if (!source) return undefined;
+  return {
+    name: source.name,
+    type: source.type,
+    ref: source.ref,
+    commit: source.commit
+  };
+}
+
+function normalizeDependencyFingerprints(fingerprints: Record<string, string | null | undefined> | undefined): Record<string, string | null> {
+  return Object.fromEntries(
+    Object.entries(fingerprints ?? {})
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, value]) => [key, value ?? null])
+  );
+}
+
+function normalizeCommandForCacheKey(command: string, options: Pick<TaskCacheKeyOptions, "candidate" | "source">): string {
+  let normalized = command;
+  const replacements = [
+    [options.candidate?.dir, "$ASYNC_PIPELINE_CANDIDATE_DIR"],
+    [options.source?.dir, "$ASYNC_PIPELINE_SOURCE_DIR"]
+  ] as const;
+  for (const [value, replacement] of replacements) {
+    if (!value) continue;
+    normalized = normalized.split(value).join(replacement);
+    normalized = normalized.split(normalizePath(value)).join(replacement);
+  }
+  return normalized;
 }
 
 function baseDirectoryForGlob(pattern: string): string {

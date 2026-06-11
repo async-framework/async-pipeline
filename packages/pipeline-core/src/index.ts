@@ -6,9 +6,11 @@ import {
   mergeWithDefaultCacheStores,
   parseCacheRef,
   type CacheDirective,
+  type CachePolicy,
   type CacheRef,
   type CacheRegistryDefinition,
   type CacheRegistryInput,
+  type CacheStrategy,
   type CacheUseOptions
 } from "./cache.js";
 import { pipelineError } from "./errors.js";
@@ -91,7 +93,8 @@ export interface TaskCacheOptions {
   directories?: CacheDirectory[];
   ref?: CacheRef;
   store?: string;
-  strategy?: "cache-first";
+  policy?: CachePolicy;
+  strategy?: CacheStrategy;
   ttlMs?: number;
   key?: unknown;
 }
@@ -717,11 +720,7 @@ export function validatePipeline(pipeline: NormalizedPipeline): void {
       }
     }
     if (taskDefinition.cache.enabled && taskDefinition.cache.store) {
-      assertCacheStore(pipeline.cache, {
-        ref: taskDefinition.cache.ref ?? `${taskDefinition.cache.store}:${taskDefinition.cache.strategy ?? "cache-first"}`,
-        store: taskDefinition.cache.store,
-        strategy: taskDefinition.cache.strategy ?? "cache-first"
-      });
+      assertCacheStore(pipeline.cache, parseCacheRef(cacheRefFromStoreOptions(taskDefinition.cache, pipeline.cache.default)));
     }
   }
 
@@ -1080,6 +1079,7 @@ function normalizeCache(cache: TaskDefinition["cache"] | CacheDirective, registr
       directories: [],
       ref: parsed.ref,
       store: parsed.store,
+      policy: parsed.policy,
       strategy: parsed.strategy,
       ttlMs: cache.options?.ttlMs,
       key: cache.options?.key
@@ -1088,15 +1088,15 @@ function normalizeCache(cache: TaskDefinition["cache"] | CacheDirective, registr
   if (cache === true) {
     const parsed = parseCacheRef(registry.default);
     assertCacheStore(registry, parsed);
-    return { enabled: true, directories: [], ref: parsed.ref, store: parsed.store, strategy: parsed.strategy };
+    return { enabled: true, directories: [], ref: parsed.ref, store: parsed.store, policy: parsed.policy, strategy: parsed.strategy };
   }
   if (cache === false || cache === undefined) return { enabled: false, directories: [] };
   if (typeof cache === "string") {
     const parsed = parseCacheRef(cache);
     assertCacheStore(registry, parsed);
-    return { enabled: true, directories: [], ref: parsed.ref, store: parsed.store, strategy: parsed.strategy };
+    return { enabled: true, directories: [], ref: parsed.ref, store: parsed.store, policy: parsed.policy, strategy: parsed.strategy };
   }
-  const ref = cache.ref ?? (cache.store ? `${cache.store}:${cache.strategy ?? "cache-first"}` : registry.default);
+  const ref = cacheRefFromStoreOptions(cache, registry.default);
   const parsed = parseCacheRef(ref);
   assertCacheStore(registry, parsed);
   return {
@@ -1105,8 +1105,16 @@ function normalizeCache(cache: TaskDefinition["cache"] | CacheDirective, registr
     directories: [...(cache.directories ?? [])],
     ref: parsed.ref,
     store: parsed.store,
+    policy: parsed.policy,
     strategy: parsed.strategy
   };
+}
+
+function cacheRefFromStoreOptions(cache: { ref?: CacheRef; store?: string; policy?: CachePolicy; strategy?: CacheStrategy }, defaultRef: CacheRef): CacheRef {
+  if (cache.ref) return cache.ref;
+  if (!cache.store) return defaultRef;
+  const policy = cache.policy ?? cache.strategy;
+  return policy ? `${cache.store}:${policy}` : cache.store;
 }
 
 function normalizeRetry(retry: TaskDefinition["retry"]): RetryPolicy {

@@ -16,13 +16,17 @@ Run a job and its dependencies:
 
 ```sh
 pnpm async-pipeline run verify
+pnpm async-pipeline run verify --concurrency 2
 ```
 
 Run one task and its dependencies through a synthetic job:
 
 ```sh
 pnpm async-pipeline run-task test
+pnpm async-pipeline run-task test --concurrency 1
 ```
+
+The scheduler starts ready tasks in deterministic graph order and runs independent tasks in parallel up to the configured concurrency. Use `--concurrency 1` to force a sequential run when debugging task interactions.
 
 Explain a task:
 
@@ -122,26 +126,32 @@ Enable cache per task:
 task({
   inputs: ["src/**/*.ts", "package.json", "pnpm-lock.yaml"],
   outputs: ["dist/**"],
-  cache: "file:cache-first",
+  cache: "file:local",
   run: sh`pnpm build`
 })
 ```
 
-`cache: true` uses the pipeline cache default. Explicit refs such as `file:cache-first` make task behavior clearer in examples and metadata.
+`cache: true` uses the pipeline cache default. Explicit refs such as `file:local` make task behavior clearer in examples and metadata.
 
 On the next run, the task can be skipped when:
 
 - the task config is the same
 - resolved shell commands are the same
 - declared input file contents are the same
+- direct dependency cache fingerprints are the same
 - source context is the same for source tasks
 - the previous cached result passed
+- `ttlMs`, when configured, has not expired
 
 Task cache lives under:
 
 ```txt
 .async/cache/tasks
 ```
+
+Input resolution ignores `.git/`, `.async/`, and `node_modules/` by default. A task's declared `outputs` are also excluded from that task's input files, so `dist/**` or `packages/*/dist/**` cannot make a build dirty after it writes its own artifacts.
+
+For file-cache tasks with declared outputs, cache entries include `result.json`, `outputs.json`, and copied output files. On a hit, outputs are restored before the task returns `cached`. Existing result-only entries for output-producing tasks are treated as misses and repopulated on the next successful run. Memory cache cannot restore files; it only honors output-producing hits while the output files from the previous run still exist.
 
 Warm source checkouts live under:
 

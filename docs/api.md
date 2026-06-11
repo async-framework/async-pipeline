@@ -25,7 +25,7 @@ import { createRuntime, defineRuntime } from "@async/pipeline/runtime";
 definePipeline({
   name: "app",
   env: {},
-  cache: "file:cache-first",
+  cache: "file:local",
   namedInputs: {},
   taskDefaults: {},
   triggers: {},
@@ -181,7 +181,7 @@ task({
   dependsOn: ["typecheck"],
   inputs: ["src/**/*.ts", "package.json"],
   outputs: ["dist/**"],
-  cache: "file:cache-first",
+  cache: "file:local",
   retry: { attempts: 2, delayMs: 500 },
   timeout: "2m",
   requires: { tools: ["node", "pnpm"] },
@@ -195,7 +195,7 @@ Task overloads:
 ```ts
 task(config);
 task(config, sh`pnpm test`);
-task(config, [cache.use("file:cache-first"), sh`pnpm test`]);
+task(config, [cache.use("file:local"), sh`pnpm test`]);
 ```
 
 If `config.run` is set and a second argument is also passed, `task` throws `ASYNC_PIPELINE_TASK_ARGUMENT_CONFLICT`.
@@ -205,9 +205,9 @@ Fields:
 | Field | Purpose |
 | --- | --- |
 | `dependsOn` | Task ids that must run first. Use `<source>:<task>` for declared source tasks. |
-| `inputs` | Files or named input groups that affect cache keys. |
-| `outputs` | Files produced by the task. Included in metadata and cache config. |
-| `cache` | `true`, `false`, a cache ref such as `"file:cache-first"`, or cache options. |
+| `inputs` | Files or named input groups that affect cache keys. `.git/`, `.async/`, `node_modules/`, and this task's declared outputs are ignored by input resolution. |
+| `outputs` | Files produced by the task. File cache snapshots and restores these files on a cache hit. |
+| `cache` | `true`, `false`, a cache ref such as `"file:local"`, or cache options. |
 | `retry` | Number of attempts or `{ attempts, delayMs }`. |
 | `timeout` | Milliseconds or a duration string such as `500ms`, `30s`, `5m`, `1h`. |
 | `requires` | Tool, secret, or runtime declarations. |
@@ -222,7 +222,7 @@ Directive form is available for reusable stacks:
 ```ts
 task({}, [
   dependsOn("build"),
-  cache.use("file:cache-first"),
+  cache.use("file:local"),
   sh`pnpm test`
 ])
 ```
@@ -233,7 +233,7 @@ Normalization lifts directives into task metadata. Metadata readers inspect dire
 
 ```ts
 const caches = defineCache({
-  default: "file:cache-first",
+  default: "file:local",
   stores: {
     memory: memoryCache(),
     file: fileCache({ root: ".async/cache/tasks" }),
@@ -249,7 +249,7 @@ definePipeline({
   name: "app",
   cache: caches,
   tasks: {
-    test: task({ cache: "file:cache-first", run: sh`pnpm test` })
+    test: task({ cache: "file:local", run: sh`pnpm test` })
   },
   jobs: {
     verify: job({ target: "test" })
@@ -261,10 +261,12 @@ Built-in runner support:
 
 | Store | Behavior |
 | --- | --- |
-| `file` | Persistent local task cache under `.async/cache/tasks` by default. |
-| `memory` | Process-local task cache. |
+| `file` | Persistent local task cache under `.async/cache/tasks` by default. Output-producing tasks store `outputs.json` and copied output files next to `result.json`. |
+| `memory` | Process-local task cache. Output-producing hits are honored only while the previously observed output files still exist. |
 
 Remote stores can be declared as runtime metadata, but `@async/pipeline` does not ship a Redis dependency.
+
+Cache keys include direct dependency cache fingerprints, so changing a dependency invalidates its dependents without hashing every task's inputs into every key. `ttlMs` is enforced for built-in stores; expired entries rerun.
 
 ## source
 
@@ -476,7 +478,7 @@ async-pipeline sync tasks generate
 async-pipeline sync tasks check
 async-pipeline github generate [--workflow <path>] [--lock <path>]
 async-pipeline github check [--workflow <path>] [--lock <path>]
-async-pipeline github run
+async-pipeline github run [--concurrency <n>]
 ```
 
 `github generate` and `github check` are compatibility aliases for the GitHub sync implementation.
@@ -485,7 +487,7 @@ async-pipeline github run
 
 `github check` fails when generated files are stale.
 
-`github run` reads the GitHub event context and runs matching jobs.
+`github run` reads the GitHub event context and runs matching jobs. Pass `--concurrency <n>` to bound parallel ready-task execution.
 
 ## Runtime Subpath
 
@@ -515,7 +517,7 @@ const work = defineRuntime([
     )
   )),
   task({ id: "sync", dependsOn: ["verify"] }, [
-    cache.use("memory:cache-first"),
+    cache.use("memory:session"),
     async (ctx, next) => {
       ctx.state.synced = true;
       return next();
@@ -541,6 +543,7 @@ import pipeline from "./pipeline.js";
 
 const record = await runJob(pipeline, {
   id: "verify",
+  concurrency: 2,
   workspace: hostWorkspace({
     cwd: process.cwd(),
     env: process.env
@@ -554,8 +557,12 @@ If `workspace` is omitted, the runner uses `hostWorkspace({ cwd: process.cwd(), 
 interface RunOptions {
   id: string;
   mode?: "manual" | "ci";
+  concurrency?: number;
   workspace?: PipelineWorkspace;
 }
+
+// concurrency is the maximum number of ready tasks that may run at once.
+// Use 1 for strict sequential execution.
 
 interface PipelineWorkspace {
   cwd: string;
@@ -576,6 +583,8 @@ interface CommandExecutor {
   checkTool?(tool: string): Promise<boolean>;
 }
 ```
+
+When omitted, `concurrency` uses a bounded local default. On the first task failure, the scheduler stops starting new tasks and lets already-running tasks finish before writing the final failed run record.
 
 The host workspace uses the real filesystem and shell. Tests can provide a custom `env`, `CommandExecutor`, or command policy without touching global process state.
 

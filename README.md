@@ -21,7 +21,8 @@ Write the workflow in TypeScript, run it locally, and generate the thin GitHub A
 Try the repo's own pipeline:
 
 ```sh
-cd /Users/patrickjs/code/async-framework/async-pipeline
+git clone https://github.com/async-framework/async-pipeline.git
+cd async-pipeline
 pnpm install --frozen-lockfile
 pnpm build
 pnpm async-pipeline run verify
@@ -35,11 +36,23 @@ cat .async/runs/<run-id>/summary.md
 cat .async/runs/<run-id>/execution.json
 ```
 
-The self pipeline lives in [pipeline.ts](pipeline.ts). It runs `typecheck`, `test`, `build`, and `pack` through the `verify` job, and it declares the GitHub triggers used to generate [.github/workflows/async-pipeline.yml](.github/workflows/async-pipeline.yml).
+The self pipeline lives in [pipeline.ts](pipeline.ts). It runs `build`, `typecheck`, `test`, and `pack` through the `verify` job, and it declares the GitHub triggers used to generate [.github/workflows/async-pipeline.yml](.github/workflows/async-pipeline.yml). The initial `pnpm build` in the quickstart bootstraps the built CLI that loads `pipeline.ts`; after that, the pipeline owns the task order.
 
 ## Examples
 
 See [examples](examples/README.md) for copyable pipeline shapes. The first complete example adapts a GitHub-native npm preview package workflow into `@async/pipeline`: [examples/github-native-npm-preview-package](examples/github-native-npm-preview-package/README.md).
+
+## How It Compares
+
+`@async/pipeline` sits between package-manager scripts and full monorepo build systems. Use it when the workflow graph itself should be typed, inspectable, local-first, and reusable by CI.
+
+| Tool | Best fit | How `@async/pipeline` differs |
+| --- | --- | --- |
+| Turborepo / Nx | Mature monorepo task orchestration, affected-package logic, parallel scheduling, and ecosystem integrations. | Smaller and explicit: developers declare the graph and inputs, metadata can be inspected safely, and dependency discovery is not inferred. |
+| npm / pnpm scripts | Simple command aliases and package-local workflows. | Adds typed tasks, declared inputs and outputs, cache records, run logs, graph inspection, and generated CI. |
+| GitHub Actions | Hosted CI, permissions, environments, platform events, and hosted runners. | Keeps GitHub Actions as a pinned bootloader that invokes the same local graph instead of redefining workflow logic in YAML. |
+
+Choose Turborepo or Nx for large monorepos that need advanced scheduling and affected-project automation. Choose npm or pnpm scripts for one-off aliases. Choose GitHub Actions directly for CI-only workflows. Choose `@async/pipeline` when task graph metadata, local run evidence, and thin generated CI matter most.
 
 ## Add A Pipeline
 
@@ -56,7 +69,7 @@ import { definePipeline, job, sh, task, trigger } from "@async/pipeline";
 
 export default definePipeline({
   name: "app",
-  cache: "file:cache-first",
+  cache: "file:local",
   triggers: {
     pr: trigger.github({ events: ["pull_request"] }),
     main: trigger.github({ events: ["push"], branches: ["main"] }),
@@ -72,20 +85,20 @@ export default definePipeline({
   tasks: {
     typecheck: task({
       inputs: ["source"],
-      cache: "file:cache-first",
+      cache: "file:local",
       run: sh`pnpm typecheck`
     }),
     test: task({
       dependsOn: ["typecheck"],
       inputs: ["source"],
-      cache: "file:cache-first",
+      cache: "file:local",
       run: sh`pnpm test`
     }),
     build: task({
       dependsOn: ["test"],
       inputs: ["source"],
       outputs: ["dist/**"],
-      cache: "file:cache-first",
+      cache: "file:local",
       run: sh`pnpm build`
     })
   },
@@ -144,8 +157,8 @@ pnpm async-pipeline run verify
 
 ```sh
 async-pipeline list
-async-pipeline run <job>
-async-pipeline run-task <task>
+async-pipeline run <job> [--concurrency <n>]
+async-pipeline run-task <task> [--concurrency <n>]
 async-pipeline graph --format json
 async-pipeline graph --format dot
 async-pipeline explain <task>
@@ -164,9 +177,11 @@ async-pipeline sync tasks generate
 async-pipeline sync tasks check
 async-pipeline github generate [--workflow <path>] [--lock <path>]
 async-pipeline github check [--workflow <path>] [--lock <path>]
-async-pipeline github run
+async-pipeline github run [--concurrency <n>]
 async-pipeline doctor
 ```
+
+The scheduler starts ready tasks in deterministic graph order and runs independent tasks in parallel up to the configured concurrency. Use `--concurrency 1` when a run needs strict sequential execution.
 
 Use `async-pipeline` as the explicit command in docs and CI. Short aliases and smart runner dispatch belong in `@async/run`, not this package.
 
@@ -198,7 +213,7 @@ The generated workflow installs dependencies, checks that the YAML and lock stil
 
 ```sh
 async-pipeline github check
-async-pipeline github run
+async-pipeline github run [--concurrency <n>]
 ```
 
 The checked-in generated workflow is [.github/workflows/async-pipeline.yml](.github/workflows/async-pipeline.yml).
@@ -251,8 +266,12 @@ Task sync records ownership in `.async-pipeline/tasks.lock.json`. `sync tasks ge
 The default pipeline cache registry includes `file` and `memory`. `cache: true` uses the pipeline default, and explicit refs make task behavior easy to read:
 
 ```ts
-task({ cache: "file:cache-first", run: sh`pnpm test` })
+task({ cache: "file:local", run: sh`pnpm test` })
 ```
+
+Cache keys are derived from the task config, resolved commands, declared inputs, direct dependency cache fingerprints, and portable source/candidate metadata. Input resolution ignores `.git/`, `.async/`, and `node_modules/` by default, and a task's declared `outputs` are excluded from that task's inputs so build artifacts do not dirty their own cache entry.
+
+When a cached file task declares `outputs`, the runner stores those files next to `result.json` and restores them before returning a cache hit. Memory cache entries cannot restore files, so output-producing memory hits are honored only while the previously observed output files still exist. `ttlMs` is enforced when present; expired entries rerun.
 
 You can override the registry without adding Redis or remote cache dependencies to this package:
 
@@ -260,7 +279,7 @@ You can override the registry without adding Redis or remote cache dependencies 
 import { defineCache, definePipeline, fileCache, job, sh, task } from "@async/pipeline";
 
 const caches = defineCache({
-  default: "file:cache-first",
+  default: "file:local",
   stores: {
     file: fileCache({ root: ".async/cache/tasks" })
   }
@@ -270,7 +289,7 @@ export default definePipeline({
   name: "app",
   cache: caches,
   tasks: {
-    test: task({ cache: "file:cache-first", run: sh`pnpm test` })
+    test: task({ cache: "file:local", run: sh`pnpm test` })
   },
   jobs: {
     verify: job({ target: "test" })
@@ -330,7 +349,6 @@ How it works:
 
 ## Not Yet For
 
-- Parallel task scheduling. Execution is deterministic and sequential today.
 - Built-in Redis or remote task cache execution. Remote stores can be declared, but no Redis dependency is shipped.
 - Automatic dependency discovery. Sources are explicit by design.
 - Automatic routing from `task.environment.backend`. Use explicit `--workspace lima` or `--workspace docker` for local isolation.

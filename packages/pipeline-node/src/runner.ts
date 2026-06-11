@@ -1,10 +1,11 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { availableParallelism } from "node:os";
 import { posix, relative } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import type { CandidateContext, CommandAction, CommandOutputPolicy, CommandPolicy, EnvValue, ExecutionRecord, NormalizedPipeline, NormalizedTask, ShellCommand, TaskContext, TaskResult, TaskRunFunction, TaskSourceContext, TaskStep } from "@async/pipeline-core";
 import { sh, tasksForJob } from "@async/pipeline-core";
-import { computeTaskCacheKey, createStore, readCacheEntry, writeCacheEntry, writeExecution, writeTaskLog, type PipelineStore } from "./store.js";
+import { computeTaskCacheKey, createStore, outputFilesExist, readCacheEntry, resolveOutputFiles, restoreCacheOutputs, writeCacheEntry, writeExecution, writeTaskLog, type PipelineStore } from "./store.js";
 import { createRunPlan, sourceContext, type ResolvedSource } from "./sources.js";
 
 export interface CommandResult {
@@ -224,11 +225,31 @@ export function commandProxy(policy: CommandPolicy = { rules: [] }): WorkspaceCo
   };
 }
 
-const memoryCacheEntries = new Map<string, TaskResult>();
+interface MemoryTaskCacheEntry {
+  result: TaskResult;
+  outputFiles: string[];
+}
+
+const memoryCacheEntries = new Map<string, MemoryTaskCacheEntry>();
+
+const DEFAULT_MAX_CONCURRENCY = 4;
+
+interface ScheduledTaskResult {
+  order: number;
+  result: TaskResult;
+}
+
+interface ScheduledTaskExecution {
+  taskId: string;
+  failed: boolean;
+  results: ScheduledTaskResult[];
+  taskResult?: TaskResult;
+}
 
 export interface RunOptions {
   id: string;
   mode?: "manual" | "ci";
+  concurrency?: number;
   workspace?: PipelineWorkspace;
 }
 
@@ -252,20 +273,48 @@ export async function runJob(pipeline: NormalizedPipeline, options: RunOptions):
   };
 
   await writeExecution(store, record);
-  const preparedSources = new Set<string>();
   const jobDefinition = plan.pipeline.jobs[options.id];
   const envDefinitions = {
     ...plan.pipeline.env,
     ...(jobDefinition?.env ?? {})
   };
+  const taskFingerprints = new Map<string, string>();
+  const concurrency = normalizeTaskConcurrency(options.concurrency);
+  const graphIndex = new Map(graph.executionOrder.map((taskId, index) => [taskId, index]));
+  const graphNodes = new Map(graph.tasks.map((node) => [node.id, node]));
+  const runnableTaskIds = graph.executionOrder.filter((taskId) => Boolean(plan.pipeline.tasks[taskId]));
+  const dependencyCounts = new Map<string, number>();
+  const sourcePrepareOrder = new Map<string, number>();
+  const recordedResults = new Map<string, { order: number; result: TaskResult }>();
+  const sourcePreparePromises = new Map<string, Promise<TaskResult | null>>();
+  const recordedPrepareSources = new Set<string>();
 
-  for (const taskId of graph.executionOrder) {
+  for (const taskId of runnableTaskIds) {
     const taskDefinition = plan.pipeline.tasks[taskId];
-    if (!taskDefinition) continue;
+    if (taskDefinition?.source?.name && !sourcePrepareOrder.has(taskDefinition.source.name)) {
+      sourcePrepareOrder.set(taskDefinition.source.name, (graphIndex.get(taskId) ?? 0) - 0.25);
+    }
+    const node = graphNodes.get(taskId);
+    dependencyCounts.set(taskId, (node?.dependsOn ?? []).filter((dependency) => Boolean(plan.pipeline.tasks[dependency])).length);
+  }
 
-    const taskSource = taskDefinition.source?.name ? plan.sources[taskDefinition.source.name] : undefined;
-    if (taskSource && !preparedSources.has(taskSource.id)) {
-      const prepareResult = await runSourcePrepare(taskSource, {
+  const ready = runnableTaskIds
+    .filter((taskId) => dependencyCounts.get(taskId) === 0)
+    .sort((left, right) => (graphIndex.get(left) ?? 0) - (graphIndex.get(right) ?? 0));
+  const running = new Map<string, Promise<ScheduledTaskExecution>>();
+  let failed = false;
+
+  const updateRecord = async (): Promise<void> => {
+    record.tasks = [...recordedResults.values()]
+      .sort((left, right) => left.order - right.order || left.result.id.localeCompare(right.result.id))
+      .map((entry) => entry.result);
+    await writeExecution(store, record);
+  };
+
+  const ensureSourcePrepared = async (source: ResolvedSource): Promise<{ result: TaskResult | null; recordResult: boolean }> => {
+    let promise = sourcePreparePromises.get(source.id);
+    if (!promise) {
+      promise = runSourcePrepare(source, {
         candidate: plan.candidate,
         executor: workspace.executor,
         rootCwd: workspace.cwd,
@@ -273,16 +322,30 @@ export async function runJob(pipeline: NormalizedPipeline, options: RunOptions):
         workspaceEnv: workspace.env,
         store
       });
-      preparedSources.add(taskSource.id);
-      if (prepareResult) {
-        record.tasks.push(prepareResult);
-        await writeExecution(store, record);
-        if (prepareResult.status === "failed") {
-          record.status = "failed";
-          record.finishedAt = new Date().toISOString();
-          await writeExecution(store, record);
-          return record;
-        }
+      sourcePreparePromises.set(source.id, promise);
+    }
+    const result = await promise;
+    const recordResult = Boolean(result && !recordedPrepareSources.has(source.id));
+    if (recordResult) recordedPrepareSources.add(source.id);
+    return { result, recordResult };
+  };
+
+  const runScheduledTask = async (taskId: string): Promise<ScheduledTaskExecution> => {
+    const taskDefinition = plan.pipeline.tasks[taskId];
+    if (!taskDefinition) return { taskId, failed: false, results: [] };
+
+    const results: ScheduledTaskResult[] = [];
+    const taskSource = taskDefinition.source?.name ? plan.sources[taskDefinition.source.name] : undefined;
+    if (taskSource) {
+      const prepare = await ensureSourcePrepared(taskSource);
+      if (prepare.result && prepare.recordResult) {
+        results.push({
+          order: sourcePrepareOrder.get(taskSource.id) ?? ((graphIndex.get(taskId) ?? 0) - 0.25),
+          result: prepare.result
+        });
+      }
+      if (prepare.result?.status === "failed") {
+        return { taskId, failed: true, results };
       }
     }
 
@@ -301,19 +364,56 @@ export async function runJob(pipeline: NormalizedPipeline, options: RunOptions):
         runId: record.id,
         workspaceEnv: workspace.env
       }) : [],
+      dependencyFingerprints: Object.fromEntries(taskDefinition.dependsOn.map((dependency) => [
+        dependency,
+        taskFingerprints.get(dependency) ?? null
+      ])),
       store
     });
-    record.tasks.push(result);
-    await writeExecution(store, record);
-    if (result.status === "failed") {
-      record.status = "failed";
-      record.finishedAt = new Date().toISOString();
-      await writeExecution(store, record);
-      return record;
+    results.push({ order: graphIndex.get(taskId) ?? results.length, result });
+    return { taskId, failed: result.status === "failed", results, taskResult: result };
+  };
+
+  while (ready.length > 0 || running.size > 0) {
+    while (!failed && ready.length > 0 && running.size < concurrency) {
+      const taskId = ready.shift();
+      if (!taskId) break;
+      running.set(taskId, runScheduledTask(taskId));
     }
+
+    if (running.size === 0) break;
+
+    const completed = await Promise.race(running.values());
+    running.delete(completed.taskId);
+
+    for (const entry of completed.results) {
+      recordedResults.set(entry.result.id, entry);
+    }
+    if (completed.taskResult) {
+      taskFingerprints.set(completed.taskId, completed.taskResult.cacheKey ?? `${completed.taskId}:${completed.taskResult.status}`);
+    }
+    await updateRecord();
+
+    if (completed.failed) {
+      failed = true;
+      ready.length = 0;
+      continue;
+    }
+
+    if (failed || !completed.taskResult) continue;
+    const node = graphNodes.get(completed.taskId);
+    for (const dependent of node?.dependents ?? []) {
+      if (!plan.pipeline.tasks[dependent]) continue;
+      const remaining = Math.max(0, (dependencyCounts.get(dependent) ?? 0) - 1);
+      dependencyCounts.set(dependent, remaining);
+      if (remaining === 0) {
+        ready.push(dependent);
+      }
+    }
+    ready.sort((left, right) => (graphIndex.get(left) ?? 0) - (graphIndex.get(right) ?? 0));
   }
 
-  record.status = "passed";
+  record.status = failed ? "failed" : "passed";
   record.finishedAt = new Date().toISOString();
   await writeExecution(store, record);
   return record;
@@ -343,6 +443,7 @@ async function runTask(
     source?: TaskSourceContext;
     envDefinitions: Record<string, EnvValue>;
     sourcePrepareCommands?: ShellCommand[];
+    dependencyFingerprints?: Record<string, string | null>;
     workspaceEnv: NodeJS.ProcessEnv;
     store: PipelineStore;
   }
@@ -390,6 +491,7 @@ async function runTask(
   const resolvedSteps = await resolveTaskSteps(taskDefinition.steps, context);
   const cacheKey = await computeTaskCacheKey(pipeline, taskDefinition, options.cwd, {
     candidate: options.candidate,
+    dependencyFingerprints: options.dependencyFingerprints,
     prepareCommands: (options.sourcePrepareCommands ?? []).map((command) => command.command),
     source: options.source,
     steps: resolvedSteps
@@ -398,19 +500,23 @@ async function runTask(
   if (taskDefinition.cache.enabled) {
     const cached = await readTaskCacheEntry(taskDefinition, options.store, cacheKey);
     if (cached?.status === "passed") {
-      const result: TaskResult = {
-        ...cached,
-        id: taskDefinition.id,
-        status: "cached",
-        startedAt,
-        finishedAt: new Date().toISOString(),
-        attempts: 0,
-        cacheKey,
-        cacheHit: true,
-        durationMs: Date.now() - started
-      };
-      await writeTaskLog(options.store, options.runId, taskDefinition.id, `[cache hit] ${cacheKey}\n`);
-      return result;
+      const cacheHit = await validateTaskCacheHit(taskDefinition, options.store, cacheKey, options.cwd, cached);
+      if (cacheHit.ok) {
+        const result: TaskResult = {
+          ...cached,
+          id: taskDefinition.id,
+          status: "cached",
+          startedAt,
+          finishedAt: new Date().toISOString(),
+          attempts: 0,
+          cacheKey,
+          cacheHit: true,
+          durationMs: Date.now() - started
+        };
+        await writeTaskLog(options.store, options.runId, taskDefinition.id, `[cache hit] ${cacheKey}\n`);
+        return result;
+      }
+      combinedLog += `[cache miss] ${cacheHit.reason}\n`;
     }
   }
 
@@ -467,7 +573,7 @@ async function runTask(
       };
       await writeTaskLog(options.store, options.runId, taskDefinition.id, combinedLog);
       if (taskDefinition.cache.enabled) {
-        await writeTaskCacheEntry(taskDefinition, options.store, cacheKey, result);
+        await writeTaskCacheEntry(taskDefinition, options.store, cacheKey, result, options.cwd);
       }
       return result;
     } catch (error) {
@@ -720,21 +826,75 @@ function isShellCommand(step: TaskStep): step is ShellCommand {
 async function readTaskCacheEntry(taskDefinition: NormalizedTask, store: PipelineStore, cacheKey: string): Promise<TaskResult | null> {
   const storeName = taskDefinition.cache.store ?? "file";
   if (storeName === "file") return readCacheEntry(store, cacheKey);
-  if (storeName === "memory") return memoryCacheEntries.get(cacheKey) ?? null;
+  if (storeName === "memory") return memoryCacheEntries.get(cacheKey)?.result ?? null;
   throw new Error(`Cache store "${storeName}" is registered but this runner cannot execute it. Use "file" or "memory", or provide a runtime-specific executor.`);
 }
 
-async function writeTaskCacheEntry(taskDefinition: NormalizedTask, store: PipelineStore, cacheKey: string, result: TaskResult): Promise<void> {
+async function writeTaskCacheEntry(taskDefinition: NormalizedTask, store: PipelineStore, cacheKey: string, result: TaskResult, cwd: string): Promise<void> {
   const storeName = taskDefinition.cache.store ?? "file";
   if (storeName === "file") {
-    await writeCacheEntry(store, cacheKey, result);
+    await writeCacheEntry(store, cacheKey, result, {
+      cwd,
+      outputs: taskDefinition.outputs
+    });
     return;
   }
   if (storeName === "memory") {
-    memoryCacheEntries.set(cacheKey, result);
+    memoryCacheEntries.set(cacheKey, {
+      result,
+      outputFiles: taskDefinition.outputs.length > 0 ? await resolveOutputFiles(cwd, taskDefinition.outputs) : []
+    });
     return;
   }
   throw new Error(`Cache store "${storeName}" is registered but this runner cannot execute it. Use "file" or "memory", or provide a runtime-specific executor.`);
+}
+
+async function validateTaskCacheHit(
+  taskDefinition: NormalizedTask,
+  store: PipelineStore,
+  cacheKey: string,
+  cwd: string,
+  cached: TaskResult
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  if (!isCacheEntryFresh(cached, taskDefinition.cache.ttlMs)) {
+    return { ok: false, reason: "cache entry expired or has an invalid timestamp" };
+  }
+
+  if (taskDefinition.outputs.length === 0) return { ok: true };
+
+  const storeName = taskDefinition.cache.store ?? "file";
+  if (storeName === "file") {
+    const restored = await restoreCacheOutputs(store, cacheKey, cwd, taskDefinition.outputs);
+    return restored
+      ? { ok: true }
+      : { ok: false, reason: "declared outputs were not available in the file cache" };
+  }
+
+  if (storeName === "memory") {
+    const entry = memoryCacheEntries.get(cacheKey);
+    if (!entry) return { ok: false, reason: "memory cache entry was not available" };
+    const outputsExist = await outputFilesExist(cwd, entry.outputFiles);
+    return outputsExist
+      ? { ok: true }
+      : { ok: false, reason: "declared outputs were missing from the working tree" };
+  }
+
+  return { ok: false, reason: `cache store "${storeName}" is not executable by this runner` };
+}
+
+function isCacheEntryFresh(cached: TaskResult, ttlMs: number | undefined): boolean {
+  if (ttlMs === undefined) return true;
+  if (!Number.isFinite(ttlMs) || ttlMs < 0) return false;
+  const finishedAtMs = cached.finishedAt ? Date.parse(cached.finishedAt) : Number.NaN;
+  return Number.isFinite(finishedAtMs) && Date.now() - finishedAtMs <= ttlMs;
+}
+
+function normalizeTaskConcurrency(concurrency: number | undefined): number {
+  if (concurrency === undefined) return Math.max(1, Math.min(DEFAULT_MAX_CONCURRENCY, availableParallelism()));
+  if (!Number.isInteger(concurrency) || concurrency < 1) {
+    throw new Error("Task concurrency must be a positive integer.");
+  }
+  return concurrency;
 }
 
 async function runFunctionStep(step: TaskRunFunction, context: TaskContext, timeoutMs?: number): Promise<void> {

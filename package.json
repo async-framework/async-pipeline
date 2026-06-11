@@ -1,7 +1,7 @@
 {
   "name": "async-pipeline-workspace",
   "private": true,
-  "version": "0.1.3",
+  "version": "0.1.4",
   "type": "module",
   "packageManager": "pnpm@10.20.0",
   "engines": {
@@ -15,9 +15,9 @@
     "pipeline:github:generate": "async-pipeline github generate",
     "pipeline:sync:check": "async-pipeline sync check",
     "pipeline:verify": "async-pipeline run verify",
-    "release:check": "pnpm typecheck && pnpm test && pnpm pipeline:sync:check && pnpm async-pipeline run verify && pnpm pack:check",
-    "test": "pnpm build && node --test tests/*.test.js",
-    "typecheck": "pnpm build && pnpm -r --sort typecheck"
+    "release:check": "pnpm build && pnpm typecheck && pnpm test && pnpm pipeline:sync:check && pnpm async-pipeline run verify && pnpm pack:check",
+    "test": "node --test tests/*.test.js",
+    "typecheck": "pnpm -r --sort typecheck"
   },
   "devDependencies": {
     "@async/pipeline": "workspace:*",

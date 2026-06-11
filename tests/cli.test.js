@@ -41,7 +41,7 @@ test("pipeline explain emits task details", () => {
 
   assert.equal(result.status, 0, result.stderr);
   const explained = JSON.parse(result.stdout);
-  assert.deepEqual(explained.dependsOn, ["build"]);
+  assert.deepEqual(explained.dependsOn, ["test"]);
 });
 
 test("runPipelineCli exposes CLI behavior without spawning a subprocess", async () => {
@@ -88,6 +88,41 @@ test("runPipelineCli can mock a CLI command through workspace commands", async (
   assert.equal(result.code, 0);
   assert.equal(stdout, "mock current\n");
   assert.equal(commands.records()[0]?.status, "mocked");
+});
+
+test("runPipelineCli validates concurrency for run commands", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "async-pipeline-cli-concurrency-"));
+  try {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ type: "module" }), "utf8");
+    writeFileSync(join(dir, "pipeline.js"), `
+import { definePipeline, job, task } from ${JSON.stringify(packageUrl)};
+
+export default definePipeline({
+  name: "fixture",
+  tasks: {
+    verify: task({ run() {} })
+  },
+  jobs: {
+    verify: job({ target: "verify" })
+  }
+});
+`, "utf8");
+
+    let stderr = "";
+    const result = await runPipelineCli({
+      args: ["run", "verify", "--concurrency", "0"],
+      workspace: hostWorkspace({ cwd: dir }),
+      stdout() {},
+      stderr(text) {
+        stderr += text;
+      }
+    });
+
+    assert.equal(result.code, 1);
+    assert.match(stderr, /Task concurrency must be a positive integer/);
+  } finally {
+    rmSync(dir, { force: true, recursive: true });
+  }
 });
 
 test("runPipelineCli validates named docker workspace before command-policy mock", async () => {

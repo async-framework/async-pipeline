@@ -29,7 +29,7 @@ test("runtime memory cache directive skips repeated work", async () => {
   let runs = 0;
   const runtime = createRuntime(defineRuntime([
     task({ id: "cached" }, [
-      cache.use("memory:cache-first"),
+      cache.use("memory:session"),
       async () => {
         runs += 1;
         return runs;

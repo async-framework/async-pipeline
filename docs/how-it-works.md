@@ -6,7 +6,7 @@
 define -> generate GitHub bootloader -> resolve graph -> run tasks -> write records/cache
 ```
 
-The pipeline definition is data. The runner decides what must run, executes it sequentially today, and writes durable local evidence under `.async/`.
+The pipeline definition is data. The runner decides what must run, schedules ready tasks with bounded concurrency, and writes durable local evidence under `.async/`.
 
 ## 1. Define
 
@@ -74,23 +74,22 @@ the scheduler:
 2. Expands the job target into the required dependency graph.
 3. Detects missing tasks, missing job targets, and dependency cycles.
 4. Sorts tasks into a deterministic execution order.
+5. Starts tasks whose dependencies have passed, up to the configured concurrency.
 
 Source tasks use namespaced refs such as `storefront:test`. The source map is explicit; `@async/pipeline` does not infer dependents from package manifests, lockfiles, npm metadata, or GitHub search.
 
 ## 4. Run Tasks
 
-The Node runner creates a run plan, prepares declared sources when needed, then executes tasks in order.
+The Node runner creates a run plan, prepares declared sources when needed, then executes ready tasks in dependency order. Independent tasks can run in parallel; dependents wait until their direct dependencies have passed.
 
 For each task it:
 
 1. Resolves shell and function steps.
 2. Checks declared tools.
-3. Computes a cache key from task config, cache ref, declared inputs, resolved commands, and source context.
-4. Replays a passing local cache result when the key matches.
+3. Computes a cache key from task config, cache ref, declared inputs, resolved commands, direct dependency fingerprints, and portable source context.
+4. Replays a passing local cache result when the key matches, the entry is fresh, and declared outputs can be restored or validated.
 5. Runs dirty tasks with retry and timeout policy.
-6. Stops on the first failed task.
-
-Execution is sequential in this tranche. Parallel scheduling is planned later.
+6. Stops scheduling new tasks on the first failure. Tasks already running are allowed to finish so the run record stays complete.
 
 ## 5. Write Records And Cache
 
@@ -108,14 +107,18 @@ The default file task cache is local:
 
 ```txt
 .async/cache/tasks/<cache-key>/result.json
+.async/cache/tasks/<cache-key>/outputs.json
+.async/cache/tasks/<cache-key>/outputs/<declared-output-file>
 ```
 
-To make a task dirty when a file changes, include that file or glob in `inputs`.
+To make a task dirty when a file changes, include that file or glob in `inputs`. Input resolution ignores `.git/`, `.async/`, and `node_modules/` by default. A task's declared `outputs` are excluded from its own input files so generated artifacts do not dirty the task that produced them.
+
+If a cached file task declares outputs, the runner snapshots those output files after a successful run and restores them before returning a cache hit. Result-only cache entries remain usable for tasks without outputs; output-producing tasks rerun once when an old entry has no output snapshot. `ttlMs` expires otherwise valid entries.
 
 Cache refs are normalized during definition:
 
 ```ts
-task({ cache: "file:cache-first", run: sh`pnpm test` })
+task({ cache: "file:local", run: sh`pnpm test` })
 ```
 
 `memory` and `file` are registered by default. Remote stores can be declared as metadata for future runtimes without adding mandatory package dependencies.

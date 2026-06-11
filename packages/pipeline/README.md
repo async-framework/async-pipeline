@@ -17,7 +17,7 @@ import { definePipeline, job, sh, task, trigger } from "@async/pipeline";
 
 export default definePipeline({
   name: "app",
-  cache: "file:cache-first",
+  cache: "file:local",
   triggers: {
     pr: trigger.github({ events: ["pull_request"] }),
     main: trigger.github({ events: ["push"], branches: ["main"] })
@@ -25,13 +25,13 @@ export default definePipeline({
   tasks: {
     typecheck: task({
       inputs: ["src/**/*.ts", "package.json", "pnpm-lock.yaml"],
-      cache: "file:cache-first",
+      cache: "file:local",
       run: sh`pnpm typecheck`
     }),
     test: task({
       dependsOn: ["typecheck"],
       inputs: ["src/**/*.ts", "tests/**/*.ts", "package.json"],
-      cache: "file:cache-first",
+      cache: "file:local",
       run: sh`pnpm test`
     })
   },

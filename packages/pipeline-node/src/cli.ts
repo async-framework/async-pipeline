@@ -20,6 +20,7 @@ export interface PipelineCliOptions {
 }
 
 interface PipelineCliContext {
+  concurrency?: number;
   cwd: string;
   configPath: string;
   pipeline: NormalizedPipeline;
@@ -30,6 +31,7 @@ interface PipelineCliContext {
 
 interface ParsedGlobalOptions {
   args: string[];
+  concurrency?: number;
   workspaceId?: string;
 }
 
@@ -107,6 +109,7 @@ async function runPipelineCliBuffered(options: PipelineCliOptions & { workspace:
     }
 
     const context: PipelineCliContext = {
+      concurrency: parsed.concurrency,
       cwd,
       configPath,
       pipeline,
@@ -158,7 +161,7 @@ async function dispatchCommand(commandName: string, args: string[], context: Pip
       for (const selectedJob of jobs) {
         const graph = tasksForJob(context.pipeline, selectedJob.id);
         context.stdout(`Running ${context.pipeline.name}:${selectedJob.id} (${graph.executionOrder.join(" -> ")})\n`);
-        const result = await runJob(context.pipeline, { id: selectedJob.id, mode: "ci", workspace: context.workspace });
+        const result = await runJob(context.pipeline, { id: selectedJob.id, mode: "ci", workspace: context.workspace, concurrency: context.concurrency });
         context.stdout(`Pipeline ${result.status}: ${result.id}\n`);
         if (result.status !== "passed") failed = true;
       }
@@ -242,7 +245,7 @@ async function dispatchCommand(commandName: string, args: string[], context: Pip
     if (!jobId) throw new Error(`Usage: ${program} run <job>`);
     const graph = tasksForJob(context.pipeline, jobId);
     context.stdout(`Running ${context.pipeline.name}:${jobId} (${graph.executionOrder.join(" -> ")})\n`);
-    const result = await runJob(context.pipeline, { id: jobId, mode: context.workspace.env.CI ? "ci" : "manual", workspace: context.workspace });
+    const result = await runJob(context.pipeline, { id: jobId, mode: context.workspace.env.CI ? "ci" : "manual", workspace: context.workspace, concurrency: context.concurrency });
     context.stdout(`Pipeline ${result.status}: ${result.id}\n`);
     return result.status === "passed" ? 0 : 1;
   }
@@ -250,7 +253,7 @@ async function dispatchCommand(commandName: string, args: string[], context: Pip
   if (commandName === "run-task") {
     const taskId = args[0];
     if (!taskId) throw new Error(`Usage: ${program} run-task <task>`);
-    const result = await runSingleTask(context.pipeline, taskId, { mode: context.workspace.env.CI ? "ci" : "manual", workspace: context.workspace });
+    const result = await runSingleTask(context.pipeline, taskId, { mode: context.workspace.env.CI ? "ci" : "manual", workspace: context.workspace, concurrency: context.concurrency });
     context.stdout(`Task run ${result.status}: ${result.id}\n`);
     return result.status === "passed" ? 0 : 1;
   }
@@ -282,8 +285,8 @@ async function handleSourcesCommand(args: string[], context: PipelineCliContext)
 
 function printHelp(program: string): string {
   return `Usage:
-  ${program} run <job> [--workspace <id>]
-  ${program} run-task <task> [--workspace <id>]
+  ${program} run <job> [--workspace <id>] [--concurrency <n>]
+  ${program} run-task <task> [--workspace <id>] [--concurrency <n>]
   ${program} list
   ${program} graph --format json|dot
   ${program} explain <task>
@@ -302,7 +305,7 @@ function printHelp(program: string): string {
   ${program} sync tasks check
   ${program} github generate [--workflow <path>] [--lock <path>]
   ${program} github check [--workflow <path>] [--lock <path>]
-  ${program} github run [--workspace <id>]
+  ${program} github run [--workspace <id>] [--concurrency <n>]
   ${program} doctor\n`;
 }
 
@@ -436,6 +439,7 @@ async function handleSyncTasksCommand(
 
 function parseGlobalOptions(args: string[]): ParsedGlobalOptions {
   const rest: string[] = [];
+  let concurrency: number | undefined;
   let workspaceId: string | undefined;
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
@@ -446,9 +450,16 @@ function parseGlobalOptions(args: string[]): ParsedGlobalOptions {
       index += 1;
       continue;
     }
+    if (arg === "--concurrency") {
+      const raw = args[index + 1];
+      if (!raw) throw new Error("Usage: async-pipeline <command> --concurrency <n>");
+      concurrency = Number(raw);
+      index += 1;
+      continue;
+    }
     rest.push(arg);
   }
-  return { args: rest, workspaceId };
+  return { args: rest, concurrency, workspaceId };
 }
 
 function selectWorkspace(workspaceId: string | undefined, pipeline: NormalizedPipeline, base: PipelineWorkspace): PipelineWorkspace {

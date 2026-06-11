@@ -2,7 +2,7 @@ import { definePipeline, env, job, sh, task, trigger } from "./packages/pipeline
 
 export default definePipeline({
   name: "async-pipeline",
-  cache: "file:cache-first",
+  cache: "file:local",
   triggers: {
     pr: trigger.github({ events: ["pull_request"] }),
     main: trigger.github({ events: ["push"], branches: ["main"] }),
@@ -38,7 +38,14 @@ export default definePipeline({
     ]
   },
   tasks: {
+    build: task({
+      inputs: ["production"],
+      outputs: ["packages/*/dist/**"],
+      cache: true,
+      run: sh`pnpm build`
+    }),
     typecheck: task({
+      dependsOn: ["build"],
       inputs: ["default"],
       cache: true,
       run: sh`pnpm typecheck`
@@ -49,15 +56,8 @@ export default definePipeline({
       cache: true,
       run: sh`pnpm test`
     }),
-    build: task({
-      dependsOn: ["test"],
-      inputs: ["production"],
-      outputs: ["packages/*/dist/**"],
-      cache: true,
-      run: sh`pnpm build`
-    }),
     pack: task({
-      dependsOn: ["build"],
+      dependsOn: ["test"],
       inputs: ["production", "package.json", "packages/*/package.json"],
       cache: false,
       run: sh`pnpm pack:check`

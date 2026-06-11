@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { definePipeline, job, sh, task } from "../packages/pipeline-core/dist/index.js";
-import { computeTaskCacheKey, resolveInputFiles } from "../packages/pipeline-node/dist/store.js";
+import { computeTaskCacheKey, createStore, resolveInputFiles, restoreCacheOutputs, writeCacheEntry } from "../packages/pipeline-node/dist/store.js";
 
 test("glob inputs are resolved deterministically and included in cache keys", async () => {
   const dir = await mkdtemp(join(tmpdir(), "async-pipeline-cache-"));
@@ -35,10 +35,74 @@ test("glob inputs are resolved deterministically and included in cache keys", as
   }
 });
 
-test("cache keys include candidate, source, and resolved prepare commands", async () => {
+test("cache inputs ignore local state directories and declared outputs", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "async-pipeline-cache-ignore-"));
+  try {
+    await mkdir(join(dir, ".async", "cache"), { recursive: true });
+    await mkdir(join(dir, ".git", "objects"), { recursive: true });
+    await mkdir(join(dir, "node_modules", "fixture"), { recursive: true });
+    await mkdir(join(dir, "packages", "app", "src"), { recursive: true });
+    await mkdir(join(dir, "packages", "app", "dist"), { recursive: true });
+    await writeFile(join(dir, ".async", "cache", "state.ts"), "export const state = true;\n", "utf8");
+    await writeFile(join(dir, ".git", "objects", "ignored.ts"), "export const ignored = true;\n", "utf8");
+    await writeFile(join(dir, "node_modules", "fixture", "ignored.ts"), "export const ignored = true;\n", "utf8");
+    await writeFile(join(dir, "packages", "app", "src", "index.ts"), "export const value = 1;\n", "utf8");
+    await writeFile(join(dir, "packages", "app", "dist", "index.d.ts"), "export declare const value = 1;\n", "utf8");
+
+    assert.deepEqual(await resolveInputFiles(dir, ["**/*.ts"]), ["packages/app/dist/index.d.ts", "packages/app/src/index.ts"]);
+    assert.deepEqual(await resolveInputFiles(dir, ["packages/**/*.ts"], {
+      exclude: ["packages/*/dist/**"]
+    }), ["packages/app/src/index.ts"]);
+  } finally {
+    await rm(dir, { force: true, recursive: true });
+  }
+});
+
+test("production cache keys ignore test edits and declared outputs", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "async-pipeline-production-cache-"));
+  try {
+    await mkdir(join(dir, "packages", "app", "src"), { recursive: true });
+    await mkdir(join(dir, "packages", "app", "dist"), { recursive: true });
+    await mkdir(join(dir, "tests"), { recursive: true });
+    await writeFile(join(dir, "packages", "app", "src", "index.ts"), "export const value = 1;\n", "utf8");
+    await writeFile(join(dir, "packages", "app", "dist", "index.d.ts"), "export declare const value = 1;\n", "utf8");
+    await writeFile(join(dir, "tests", "app.test.js"), "test('one', () => {});\n", "utf8");
+
+    const pipeline = definePipeline({
+      name: "cache-test",
+      namedInputs: {
+        production: ["packages/**/*.ts", "!tests/**/*.test.js"]
+      },
+      tasks: {
+        build: task({
+          inputs: ["production"],
+          outputs: ["packages/*/dist/**"],
+          cache: true,
+          run: sh`echo build`
+        })
+      },
+      jobs: {
+        verify: job({ target: "build" })
+      }
+    });
+
+    const first = await computeTaskCacheKey(pipeline, pipeline.tasks.build, dir);
+    await writeFile(join(dir, "tests", "app.test.js"), "test('two', () => {});\n", "utf8");
+    await writeFile(join(dir, "packages", "app", "dist", "index.d.ts"), "export declare const value = 2;\n", "utf8");
+    const second = await computeTaskCacheKey(pipeline, pipeline.tasks.build, dir);
+
+    assert.equal(first, second);
+  } finally {
+    await rm(dir, { force: true, recursive: true });
+  }
+});
+
+test("cache keys omit candidate fingerprints and absolute working directories", async () => {
   const dir = await mkdtemp(join(tmpdir(), "async-pipeline-source-cache-"));
+  const otherDir = await mkdtemp(join(tmpdir(), "async-pipeline-source-cache-other-"));
   try {
     await writeFile(join(dir, "input.txt"), "one\n", "utf8");
+    await writeFile(join(otherDir, "input.txt"), "one\n", "utf8");
     const pipeline = definePipeline({
       name: "cache-test",
       tasks: {
@@ -51,15 +115,16 @@ test("cache keys include candidate, source, and resolved prepare commands", asyn
 
     const baseOptions = {
       source: { name: "app", dir, type: "path" },
-      prepareCommands: ["pnpm install"]
+      prepareCommands: [`pnpm add file:${dir}`]
     };
     const first = await computeTaskCacheKey(pipeline, pipeline.tasks.test, dir, {
       ...baseOptions,
       candidate: { dir, fingerprint: "candidate-a" }
     });
-    const second = await computeTaskCacheKey(pipeline, pipeline.tasks.test, dir, {
-      ...baseOptions,
-      candidate: { dir, fingerprint: "candidate-b" }
+    const second = await computeTaskCacheKey(pipeline, pipeline.tasks.test, otherDir, {
+      source: { name: "app", dir: otherDir, type: "path" },
+      prepareCommands: [`pnpm add file:${otherDir}`],
+      candidate: { dir: otherDir, fingerprint: "candidate-b" }
     });
     const third = await computeTaskCacheKey(pipeline, pipeline.tasks.test, dir, {
       ...baseOptions,
@@ -67,8 +132,35 @@ test("cache keys include candidate, source, and resolved prepare commands", asyn
       prepareCommands: ["pnpm install", "pnpm add file:../candidate"]
     });
 
-    assert.notEqual(first, second);
+    assert.equal(first, second);
     assert.notEqual(first, third);
+  } finally {
+    await rm(dir, { force: true, recursive: true });
+    await rm(otherDir, { force: true, recursive: true });
+  }
+});
+
+test("file cache entries snapshot and restore declared outputs", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "async-pipeline-output-cache-"));
+  try {
+    const store = await createStore(dir);
+    await mkdir(join(dir, "dist"), { recursive: true });
+    await writeFile(join(dir, "dist", "artifact.txt"), "cached output\n", "utf8");
+
+    await writeCacheEntry(store, "cache-key", {
+      id: "build",
+      status: "passed",
+      attempts: 1,
+      cacheHit: false,
+      finishedAt: new Date().toISOString()
+    }, {
+      cwd: dir,
+      outputs: ["dist/**"]
+    });
+
+    await rm(join(dir, "dist"), { force: true, recursive: true });
+    assert.equal(await restoreCacheOutputs(store, "cache-key", dir, ["dist/**"]), true);
+    assert.equal(await readFile(join(dir, "dist", "artifact.txt"), "utf8"), "cached output\n");
   } finally {
     await rm(dir, { force: true, recursive: true });
   }

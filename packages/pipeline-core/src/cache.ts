@@ -1,6 +1,8 @@
 import { pipelineError } from "./errors.js";
 
-export type CacheStrategy = "cache-first";
+export type CachePolicy = "local" | "session";
+export type LegacyCacheStrategy = "cache-first";
+export type CacheStrategy = CachePolicy | LegacyCacheStrategy;
 export type CacheRef = `${string}:${CacheStrategy}` | string;
 
 export interface CacheStoreDefinition {
@@ -36,10 +38,12 @@ export interface CacheRegistryDefinition {
 export interface ParsedCacheRef {
   ref: CacheRef;
   store: string;
+  policy: CachePolicy;
   strategy: CacheStrategy;
 }
 
-const knownStrategies = new Set<CacheStrategy>(["cache-first"]);
+const knownPolicies = new Set<CachePolicy>(["local", "session"]);
+const legacyStrategies = new Set<LegacyCacheStrategy>(["cache-first"]);
 
 export function memoryCache(): CacheStoreDefinition {
   return { kind: "cache-store", type: "memory" };
@@ -62,20 +66,20 @@ export function defineCache(input: CacheRegistryInput | Record<string, CacheStor
   const stores = hasStoresEnvelope
     ? { ...((input as CacheRegistryInput).stores ?? {}) }
     : { ...(input as Record<string, CacheStoreDefinition>) };
-  const defaultRef = hasStoresEnvelope ? ((input as CacheRegistryInput).default ?? "memory:cache-first") : "memory:cache-first";
+  const defaultRef = hasStoresEnvelope ? ((input as CacheRegistryInput).default ?? "memory:session") : "memory:session";
 
   return makeCacheRegistry(defaultRef, stores);
 }
 
 export function defaultPipelineCache(): CacheRegistryDefinition {
-  return makeCacheRegistry("file:cache-first", {
+  return makeCacheRegistry("file:local", {
     memory: memoryCache(),
     file: fileCache({ root: ".async/cache/tasks" })
   });
 }
 
 export function defaultRuntimeCache(): CacheRegistryDefinition {
-  return makeCacheRegistry("memory:cache-first", {
+  return makeCacheRegistry("memory:session", {
     memory: memoryCache(),
     file: fileCache({ root: ".async/cache/runtime" })
   });
@@ -84,14 +88,20 @@ export function defaultRuntimeCache(): CacheRegistryDefinition {
 export const cache = defaultPipelineCache();
 
 export function parseCacheRef(ref: CacheRef): ParsedCacheRef {
-  const [store, strategy = "cache-first", extra] = String(ref).split(":");
+  const parts = String(ref).split(":");
+  const store = parts[0] ?? "";
+  const policyToken = parts[1] ?? defaultCachePolicyForStore(store);
+  const extra = parts[2];
   if (!store || extra !== undefined) {
-    throw pipelineError("ASYNC_PIPELINE_INVALID_CACHE_REF", `Invalid cache reference "${ref}". Use "store:strategy".`, { ref });
+    throw pipelineError("ASYNC_PIPELINE_INVALID_CACHE_REF", `Invalid cache reference "${ref}". Use "store:policy".`, { ref });
   }
-  if (!knownStrategies.has(strategy as CacheStrategy)) {
-    throw pipelineError("ASYNC_PIPELINE_UNKNOWN_CACHE_STRATEGY", `Unknown cache strategy "${strategy}" in "${ref}".`, { ref, strategy });
+  if (knownPolicies.has(policyToken as CachePolicy)) {
+    return { ref, store, policy: policyToken as CachePolicy, strategy: policyToken as CachePolicy };
   }
-  return { ref, store, strategy: strategy as CacheStrategy };
+  if (legacyStrategies.has(policyToken as LegacyCacheStrategy)) {
+    return { ref, store, policy: defaultCachePolicyForStore(store), strategy: policyToken as LegacyCacheStrategy };
+  }
+  throw pipelineError("ASYNC_PIPELINE_UNKNOWN_CACHE_STRATEGY", `Unknown cache policy "${policyToken}" in "${ref}".`, { ref, strategy: policyToken });
 }
 
 export function isCacheDirective(value: unknown): value is CacheDirective {
@@ -131,4 +141,8 @@ function makeCacheRegistry(defaultRef: CacheRef, stores: Record<string, CacheSto
       };
     }
   };
+}
+
+export function defaultCachePolicyForStore(store: string): CachePolicy {
+  return store === "memory" ? "session" : "local";
 }

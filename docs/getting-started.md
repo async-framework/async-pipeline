@@ -56,7 +56,7 @@ import { definePipeline, job, sh, task, trigger } from "@async/pipeline";
 
 export default definePipeline({
   name: "web-app",
-  cache: "file:cache-first",
+  cache: "file:local",
   namedInputs: {
     source: [
       "src/**/*.ts",
@@ -74,14 +74,14 @@ export default definePipeline({
   tasks: {
     typecheck: task({
       inputs: ["source"],
-      cache: "file:cache-first",
+      cache: "file:local",
       timeout: "2m",
       run: sh`pnpm typecheck`
     }),
     test: task({
       dependsOn: ["typecheck"],
       inputs: ["source"],
-      cache: "file:cache-first",
+      cache: "file:local",
       retry: { attempts: 2, delayMs: 500 },
       run: sh`pnpm test`
     }),
@@ -89,7 +89,7 @@ export default definePipeline({
       dependsOn: ["test"],
       inputs: ["source"],
       outputs: ["dist/**"],
-      cache: "file:cache-first",
+      cache: "file:local",
       run: sh`pnpm build`
     })
   },
@@ -179,6 +179,7 @@ CI then runs:
 ```sh
 pnpm async-pipeline github check
 pnpm async-pipeline github run
+pnpm async-pipeline github run --concurrency 2
 ```
 
 `github check` fails when the committed workflow or lock no longer matches the GitHub-relevant metadata in `pipeline.ts`.

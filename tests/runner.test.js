@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { test } from "node:test";
 import { command, definePipeline, env, job, sh, task } from "../packages/pipeline-core/dist/index.js";
 import { commandProxy, hostWorkspace, runJob, runSingleTask } from "../packages/pipeline-node/dist/runner.js";
@@ -275,6 +276,331 @@ test("mapped env vars fail before execution when unmapped", async () => {
     assert.equal(record.status, "failed");
     assert.match(record.tasks[0]?.error ?? "", /value "stage" is not mapped/);
     assert.doesNotMatch(record.tasks[0]?.error ?? "", /exit code 2/);
+  } finally {
+    await rm(dir, { force: true, recursive: true });
+  }
+});
+
+test("runJob schedules ready tasks in parallel up to concurrency", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "async-pipeline-parallel-"));
+  let releaseA = () => {};
+  let releaseB = () => {};
+  let bothStarted = () => {};
+  const waitA = new Promise((resolve) => {
+    releaseA = resolve;
+  });
+  const waitB = new Promise((resolve) => {
+    releaseB = resolve;
+  });
+  const bothStartedPromise = new Promise((resolve) => {
+    bothStarted = resolve;
+  });
+  const events = [];
+  const markStarted = (taskId) => {
+    events.push(`${taskId}:start`);
+    if (events.includes("a:start") && events.includes("b:start")) bothStarted();
+  };
+
+  try {
+    const pipeline = definePipeline({
+      name: "parallel-test",
+      tasks: {
+        a: task({
+          cache: false,
+          async run() {
+            markStarted("a");
+            await waitA;
+            events.push("a:end");
+          }
+        }),
+        b: task({
+          cache: false,
+          async run() {
+            markStarted("b");
+            await waitB;
+            events.push("b:end");
+          }
+        }),
+        c: task({
+          dependsOn: ["a", "b"],
+          cache: false,
+          run() {
+            events.push("c:start");
+          }
+        })
+      },
+      jobs: {
+        verify: job({ target: "c" })
+      }
+    });
+
+    const run = runJob(pipeline, {
+      id: "verify",
+      concurrency: 2,
+      workspace: hostWorkspace({ cwd: dir })
+    });
+    await Promise.race([
+      bothStartedPromise,
+      delay(1000).then(() => assert.fail(`ready tasks did not start in parallel: ${events.join(", ")}`))
+    ]);
+    assert.deepEqual(new Set(events), new Set(["a:start", "b:start"]));
+
+    releaseA();
+    releaseB();
+    const record = await run;
+
+    assert.equal(record.status, "passed");
+    assert.deepEqual(record.tasks.map((entry) => entry.id), ["a", "b", "c"]);
+    assert.equal(events.at(-1), "c:start");
+  } finally {
+    await rm(dir, { force: true, recursive: true });
+  }
+});
+
+test("runJob rejects invalid concurrency", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "async-pipeline-invalid-concurrency-"));
+  try {
+    const pipeline = definePipeline({
+      name: "invalid-concurrency-test",
+      tasks: {
+        test: task({ cache: false, run() {} })
+      },
+      jobs: {
+        verify: job({ target: "test" })
+      }
+    });
+
+    await assert.rejects(
+      () => runJob(pipeline, { id: "verify", concurrency: 0, workspace: hostWorkspace({ cwd: dir }) }),
+      /Task concurrency must be a positive integer/
+    );
+  } finally {
+    await rm(dir, { force: true, recursive: true });
+  }
+});
+
+test("file cache restores declared outputs on cache hit", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "async-pipeline-output-restore-"));
+  try {
+    const pipeline = definePipeline({
+      name: "output-restore-test",
+      tasks: {
+        build: task({
+          cache: true,
+          outputs: ["dist/**"],
+          async run() {
+            await mkdir(join(dir, "dist"), { recursive: true });
+            await writeFile(join(dir, "dist", "artifact.txt"), "restored output\n", "utf8");
+          }
+        })
+      },
+      jobs: {
+        verify: job({ target: "build" })
+      }
+    });
+
+    const first = await runJob(pipeline, {
+      id: "verify",
+      workspace: hostWorkspace({ cwd: dir })
+    });
+    assert.equal(first.tasks[0]?.status, "passed");
+
+    await rm(join(dir, "dist"), { force: true, recursive: true });
+    const second = await runJob(pipeline, {
+      id: "verify",
+      workspace: hostWorkspace({ cwd: dir })
+    });
+
+    assert.equal(second.tasks[0]?.status, "cached");
+    assert.equal(await readFile(join(dir, "dist", "artifact.txt"), "utf8"), "restored output\n");
+  } finally {
+    await rm(dir, { force: true, recursive: true });
+  }
+});
+
+test("result-only file cache entries for output tasks rerun and repopulate outputs", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "async-pipeline-legacy-output-cache-"));
+  let runs = 0;
+  try {
+    const pipeline = definePipeline({
+      name: "legacy-output-test",
+      tasks: {
+        build: task({
+          cache: true,
+          outputs: ["dist/**"],
+          async run() {
+            runs += 1;
+            await mkdir(join(dir, "dist"), { recursive: true });
+            await writeFile(join(dir, "dist", "artifact.txt"), `run ${runs}\n`, "utf8");
+          }
+        })
+      },
+      jobs: {
+        verify: job({ target: "build" })
+      }
+    });
+
+    const first = await runJob(pipeline, {
+      id: "verify",
+      workspace: hostWorkspace({ cwd: dir })
+    });
+    const cacheKey = first.tasks[0]?.cacheKey;
+    assert.equal(first.tasks[0]?.status, "passed");
+    assert.ok(cacheKey);
+
+    await rm(join(dir, "dist"), { force: true, recursive: true });
+    await rm(join(dir, ".async", "cache", "tasks", cacheKey, "outputs.json"), { force: true });
+    await rm(join(dir, ".async", "cache", "tasks", cacheKey, "outputs"), { force: true, recursive: true });
+
+    const second = await runJob(pipeline, {
+      id: "verify",
+      workspace: hostWorkspace({ cwd: dir })
+    });
+
+    assert.equal(second.tasks[0]?.status, "passed");
+    assert.equal(runs, 2);
+    assert.equal(await readFile(join(dir, "dist", "artifact.txt"), "utf8"), "run 2\n");
+  } finally {
+    await rm(dir, { force: true, recursive: true });
+  }
+});
+
+test("ttlMs expires otherwise valid cache entries", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "async-pipeline-cache-ttl-"));
+  let runs = 0;
+  try {
+    const pipeline = definePipeline({
+      name: "ttl-test",
+      tasks: {
+        test: task({
+          cache: { ttlMs: 1 },
+          run() {
+            runs += 1;
+          }
+        })
+      },
+      jobs: {
+        verify: job({ target: "test" })
+      }
+    });
+
+    const first = await runJob(pipeline, {
+      id: "verify",
+      workspace: hostWorkspace({ cwd: dir })
+    });
+    assert.equal(first.tasks[0]?.status, "passed");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const second = await runJob(pipeline, {
+      id: "verify",
+      workspace: hostWorkspace({ cwd: dir })
+    });
+
+    assert.equal(second.tasks[0]?.status, "passed");
+    assert.equal(runs, 2);
+  } finally {
+    await rm(dir, { force: true, recursive: true });
+  }
+});
+
+test("dependency cache keys invalidate direct dependents", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "async-pipeline-dependency-cache-"));
+  let buildRuns = 0;
+  let testRuns = 0;
+  try {
+    await writeFile(join(dir, "build-input.txt"), "one\n", "utf8");
+    await writeFile(join(dir, "test-input.txt"), "stable\n", "utf8");
+    const pipeline = definePipeline({
+      name: "dependency-cache-test",
+      tasks: {
+        build: task({
+          cache: true,
+          inputs: ["build-input.txt"],
+          run() {
+            buildRuns += 1;
+          }
+        }),
+        test: task({
+          dependsOn: ["build"],
+          cache: true,
+          inputs: ["test-input.txt"],
+          run() {
+            testRuns += 1;
+          }
+        })
+      },
+      jobs: {
+        verify: job({ target: "test" })
+      }
+    });
+
+    const first = await runJob(pipeline, {
+      id: "verify",
+      workspace: hostWorkspace({ cwd: dir })
+    });
+    assert.deepEqual(first.tasks.map((entry) => entry.status), ["passed", "passed"]);
+
+    const second = await runJob(pipeline, {
+      id: "verify",
+      workspace: hostWorkspace({ cwd: dir })
+    });
+    assert.deepEqual(second.tasks.map((entry) => entry.status), ["cached", "cached"]);
+
+    await writeFile(join(dir, "build-input.txt"), "two\n", "utf8");
+    const third = await runJob(pipeline, {
+      id: "verify",
+      workspace: hostWorkspace({ cwd: dir })
+    });
+
+    assert.deepEqual(third.tasks.map((entry) => entry.status), ["passed", "passed"]);
+    assert.equal(buildRuns, 2);
+    assert.equal(testRuns, 2);
+  } finally {
+    await rm(dir, { force: true, recursive: true });
+  }
+});
+
+test("memory cache only honors output task hits while outputs still exist", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "async-pipeline-memory-output-cache-"));
+  let runs = 0;
+  try {
+    const pipeline = definePipeline({
+      name: "memory-output-test",
+      tasks: {
+        build: task({
+          cache: "memory:session",
+          outputs: ["dist/**"],
+          async run() {
+            runs += 1;
+            await mkdir(join(dir, "dist"), { recursive: true });
+            await writeFile(join(dir, "dist", "artifact.txt"), `run ${runs}\n`, "utf8");
+          }
+        })
+      },
+      jobs: {
+        verify: job({ target: "build" })
+      }
+    });
+
+    const first = await runJob(pipeline, {
+      id: "verify",
+      workspace: hostWorkspace({ cwd: dir })
+    });
+    const second = await runJob(pipeline, {
+      id: "verify",
+      workspace: hostWorkspace({ cwd: dir })
+    });
+    await rm(join(dir, "dist"), { force: true, recursive: true });
+    const third = await runJob(pipeline, {
+      id: "verify",
+      workspace: hostWorkspace({ cwd: dir })
+    });
+
+    assert.equal(first.tasks[0]?.status, "passed");
+    assert.equal(second.tasks[0]?.status, "cached");
+    assert.equal(third.tasks[0]?.status, "passed");
+    assert.equal(runs, 2);
+    assert.equal(await readFile(join(dir, "dist", "artifact.txt"), "utf8"), "run 2\n");
   } finally {
     await rm(dir, { force: true, recursive: true });
   }

@@ -75,7 +75,7 @@ jobs:
       matrix:
         runner:
           - ["ubuntu-latest"]
-          - ["self-hosted","macos","tart"]
+          - ["macos-latest"]
     runs-on: ${{ matrix.runner }}
     steps:
       - name: Checkout

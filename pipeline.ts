@@ -101,10 +101,9 @@ export default definePipeline({
       target: "pack",
       trigger: ["pr", "main", "release"],
       github: {
-        // ubuntu is GitHub-hosted; macOS runs on a self-hosted Apple Silicon
-        // runner managed by Tart VMs (e.g. Tartelet/ekiden hosts) that
-        // registers with these labels. See docs/github-actions.md.
-        runsOnMatrix: ["ubuntu-latest", ["self-hosted", "macos", "tart"]]
+        // Both GitHub-hosted. Self-hosted label sets (e.g. Tart VMs on Apple
+        // Silicon) are supported too; see docs/github-actions.md.
+        runsOnMatrix: ["ubuntu-latest", "macos-latest"]
       }
     }),
     publish: job({

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.3 - 2026-06-12
+
+### Features
+
+- MCP server: `async-pipeline mcp` serves the inspection surface (`list_tasks`, `graph`, `explain_task`, `metadata`, `list_runs`, `read_run`, `diff_inputs`) over stdio as line-delimited JSON-RPC 2.0, hand-rolled with zero added dependencies. Read-only by default; `--allow-run` additionally exposes `run_job`, which acquires the same run lock, writes the same records, and replays the same cache as a CLI run. Design: docs/adr/0002-mcp-server.md.
+- Failure context packs: failed tasks write `.async/runs/<run-id>/context/<task>.json` with the error, a redacted 4 KiB log tail, the reproduction command, the input diff against the task's last passing cache entry (content digests only), and — when `tests/claims.json` exists — the claim ids whose test titles appear in the log. Backed by per-file digest manifests (`inputs.json`) persisted with every cache entry and per-task baseline pointers pruned by `gc`. Inspect with `explain --run <run-id>` and `explain <task> --diff-inputs` (text or `--format json`). Design: docs/adr/0003-failure-context-packs.md.
+
 ## 0.2.2 - 2026-06-12
 
 ### Features

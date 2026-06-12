@@ -72,7 +72,7 @@ test("pipeline explain emits task details", () => {
 
   assert.equal(result.status, 0, result.stderr);
   const explained = JSON.parse(result.stdout);
-  assert.deepEqual(explained.dependsOn, ["test", "drift", "claims", "docs", "sync-check"]);
+  assert.deepEqual(explained.dependsOn, ["test", "drift", "claims", "docs", "sync-check", "examples"]);
 });
 
 test("runPipelineCli exposes CLI behavior without spawning a subprocess", async () => {

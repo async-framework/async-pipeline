@@ -105,8 +105,22 @@ export default definePipeline({
       cache: true,
       run: sh`pnpm test`
     }),
+    examples: task({
+      description: "Every committed example runs green from its own directory through the public CLI, and its committed sync artifacts are current.",
+      dependsOn: ["build"],
+      inputs: [
+        "examples/**",
+        "!examples/*/dist/**",
+        "!examples/*/build/**",
+        "!examples/**/*.tgz",
+        "!examples/many-repo-impact-run/repos/*/candidate.json",
+        "tests/examples/examples.test.js"
+      ],
+      cache: true,
+      run: sh`node --test tests/examples/examples.test.js`
+    }),
     pack: task({
-      dependsOn: ["test", "drift", "claims", "docs", "sync-check"],
+      dependsOn: ["test", "drift", "claims", "docs", "sync-check", "examples"],
       inputs: ["production", "package.json", "packages/*/package.json", "scripts/check-exports.mjs"],
       cache: false,
       run: [sh`pnpm exports:check`, sh`pnpm pack:check`]

@@ -54,7 +54,7 @@ The self pipeline lives in [pipeline.ts](pipeline.ts). It runs `build`, `typeche
 
 ## Examples
 
-See [examples](examples/README.md) for copyable pipeline shapes. The first complete example adapts a GitHub-native npm preview package workflow into `@async/pipeline`: [examples/github-native-npm-preview-package](examples/github-native-npm-preview-package/README.md).
+See [examples](examples/README.md) for copyable pipeline shapes, all exercised by this repo's own `release:check`: a [basic node package](examples/basic-node-package/README.md), the [GitHub-native npm preview package workflow](examples/github-native-npm-preview-package/README.md), [monorepo package selection](examples/monorepo-package-selection/README.md), a [Deno worker](examples/deno-worker/README.md), a [many-repo impact run](examples/many-repo-impact-run/README.md), a [custom cache registry](examples/custom-cache-registry/README.md), and a [runtime middleware stack](examples/runtime-middleware-stack/README.md).
 
 ## How It Compares
 

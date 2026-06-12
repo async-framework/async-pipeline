@@ -2,15 +2,17 @@
 
 These examples show different shapes for `@async/pipeline` projects. Each example is meant to be copyable into a real repo and adapted to its package manager, package names, secrets, and release policy.
 
+Every example runs from its own directory and is exercised by this repo's `release:check` (the self pipeline's `examples` task), so a green build means the examples work as documented.
+
 | Example | Status | What it shows |
 | --- | --- | --- |
-| [github-native-npm-preview-package](github-native-npm-preview-package/README.md) | Ready | A TypeScript pipeline version of the GitHub-native npm preview package workflow from PatrickJS's Gist. |
-| `basic-node-package` | Planned | One package with `typecheck`, `test`, `build`, `pack`, GitHub sync, and package task sync. |
-| `monorepo-package-selection` | Planned | Syncing package-manager scripts into selected workspace packages by `package.json#name`. |
-| `deno-worker` | Planned | Writing generated commands into `deno.json` tasks. |
-| `many-repo-impact-run` | Planned | Explicit source repos, namespaced tasks, and GitHub matrix planning. |
-| `custom-cache-registry` | Planned | File, memory, and placeholder remote cache registry definitions. |
-| `runtime-middleware-stack` | Planned | `defineRuntime(...)` and `createRuntime(...)` for app/background workflow composition. |
+| [basic-node-package](basic-node-package/README.md) | Ready | One package with `typecheck`, `test`, `build`, `pack`, GitHub sync, and package task sync — the shape to copy first. |
+| [github-native-npm-preview-package](github-native-npm-preview-package/README.md) | Ready | A pipeline version of the GitHub-native npm preview package workflow from PatrickJS's Gist. |
+| [monorepo-package-selection](monorepo-package-selection/README.md) | Ready | Syncing package-manager scripts into selected workspace packages by `package.json#name`. |
+| [deno-worker](deno-worker/README.md) | Ready | Writing generated commands into `deno.json` tasks alongside `package.json` scripts. |
+| [many-repo-impact-run](many-repo-impact-run/README.md) | Ready | Explicit source repos, namespaced tasks, candidate wiring through `prepare`, and GitHub matrix planning. |
+| [custom-cache-registry](custom-cache-registry/README.md) | Ready | File, memory, and placeholder remote cache registry definitions, with observable cache behavior per store. |
+| [runtime-middleware-stack](runtime-middleware-stack/README.md) | Ready | `defineRuntime(...)` and `createRuntime(...)` for app/background workflow composition. |
 
 ## Safety
 

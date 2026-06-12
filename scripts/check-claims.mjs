@@ -2,7 +2,7 @@
 // Claim -> test coverage checks (AGENTS.md rule 2, made executable). Fails when
 // documented claims and enforcing tests drift apart:
 // 1. Every registered claim anchor still appears verbatim in its source doc.
-// 2. Every test a claim points at still exists in tests/*.test.js.
+// 2. Every test a claim points at still exists in tests/**/*.test.js.
 // 3. Every test titled "PROMISE: ..." is registered for at least one claim.
 // The registry lives in tests/claims.json. It does not prove a test is
 // sufficient — review does that — but it makes silently dropping either side
@@ -59,19 +59,27 @@ for (const claim of claims) {
 
 // 2. Every referenced test exists; 3. every PROMISE test is registered.
 const testTitles = new Set();
-for (const entry of await readdir(join(root, "tests"), { withFileTypes: true })) {
-  if (!entry.isFile() || !entry.name.endsWith(".test.js")) continue;
-  const text = await readFile(join(root, "tests", entry.name), "utf8");
-  for (const match of text.matchAll(/^\s*test\(\s*"((?:[^"\\]|\\.)*)"/gm)) {
-    testTitles.add(match[1]);
+async function collectTestTitles(dir) {
+  for (const entry of await readdir(join(root, dir), { withFileTypes: true })) {
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      await collectTestTitles(path);
+      continue;
+    }
+    if (!entry.isFile() || !entry.name.endsWith(".test.js")) continue;
+    const text = await readFile(join(root, path), "utf8");
+    for (const match of text.matchAll(/^\s*test\(\s*"((?:[^"\\]|\\.)*)"/gm)) {
+      testTitles.add(match[1]);
+    }
   }
 }
+await collectTestTitles("tests");
 const referencedTests = new Set();
 for (const claim of claims) {
   for (const testName of claim.tests ?? []) {
     referencedTests.add(testName);
     if (!testTitles.has(testName)) {
-      fail(`claim "${claim.id}": no test titled "${testName}" exists in tests/*.test.js. The claim is documented but unenforced.`);
+      fail(`claim "${claim.id}": no test titled "${testName}" exists in tests/**/*.test.js. The claim is documented but unenforced.`);
     }
   }
 }

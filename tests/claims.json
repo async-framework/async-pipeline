@@ -1,5 +1,5 @@
 {
-  "$comment": "Claim -> test map enforced by scripts/check-claims.mjs (AGENTS.md rule 2). Each anchor must appear verbatim in its source file, and every listed test title must exist in tests/*.test.js. Every test titled 'PROMISE: ...' must be registered here. When you add a behavioral claim to README.md, docs/, AGENTS.md, or CHANGELOG.md, register it; when you soften or remove a claim, update or remove its entry.",
+  "$comment": "Claim -> test map enforced by scripts/check-claims.mjs (AGENTS.md rule 2). Each anchor must appear verbatim in its source file, and every listed test title must exist in tests/**/*.test.js. Every test titled 'PROMISE: ...' must be registered here. When you add a behavioral claim to README.md, docs/, AGENTS.md, or CHANGELOG.md, register it; when you soften or remove a claim, update or remove its entry.",
   "claims": [
     {
       "id": "readme.parallel-scheduler",
@@ -512,6 +512,15 @@
       "tests": [
         "release events with a tag that does not match package.json fail before publishing",
         "release events with a matching v-prefixed tag publish normally"
+      ]
+    },
+    {
+      "id": "examples.exercised-by-release-check",
+      "source": "README.md",
+      "anchor": "all exercised by this repo's own `release:check`",
+      "tests": [
+        "basic-node-package: verify runs, re-runs cached, and sync artifacts are current",
+        "many-repo-impact-run: impact job runs both source repos and matrix plans them"
       ]
     }
   ]

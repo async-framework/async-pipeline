@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { existsSync, realpathSync } from "node:fs";
-import { readdir, rm } from "node:fs/promises";
+import { readFile, readdir, rm } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { buildGraph, composePipelines, tasksForJob, type NormalizedPipeline } from "@async/pipeline-core";
@@ -8,6 +8,7 @@ import { runDoctor } from "./doctor.js";
 import { checkGitHubWorkflow, jobsForGitHubEvent, readGitHubEventContext, renderGitHubWorkflow, writeGitHubWorkflow } from "./github.js";
 import { loadPipeline } from "./loader.js";
 import { beginShutdown, commandProxy, planJob, runJob, runSingleTask, shutdownExitCode, type CommandResult, type PipelineCommands } from "./runner.js";
+import { runMcpServer } from "./mcp.js";
 import { computeTaskInputManifest, createStore, diffInputManifests, pruneCacheEntries, readCacheInputManifest, readContextPacks, readTaskBaseline } from "./store.js";
 import { matrixForJob, readPipelineMetadata, resolveSources, sourceContext } from "./sources.js";
 import { checkTaskSync, describeTaskSync, renderTaskSync, writeTaskSync } from "./sync.js";
@@ -337,6 +338,20 @@ async function dispatchCommand(commandName: string, args: string[], context: Pip
     return 0;
   }
 
+  if (commandName === "mcp") {
+    return runMcpServer({
+      pipeline: context.pipeline,
+      configPath: context.configPath,
+      cwd: context.cwd,
+      env: context.env,
+      store: virtualStore(context.cwd),
+      allowRun: args.includes("--allow-run"),
+      serverVersion: await ownPackageVersion(),
+      input: process.stdin,
+      write: (line) => context.stdout(`${line}\n`)
+    });
+  }
+
   if (commandName === "matrix") {
     const jobId = args[0];
     if (!jobId) throw new Error(`Usage: ${program} matrix <job> --format github`);
@@ -544,6 +559,7 @@ function printHelp(program: string): string {
   ${program} graph --format json|dot
   ${program} explain <task> [--diff-inputs] [--format text|json]
   ${program} explain --run <run-id> [--format text|json]
+  ${program} mcp [--allow-run]
   ${program} sources list
   ${program} sources sync
   ${program} metadata --format json [--include-sources]
@@ -759,6 +775,22 @@ function reportFailedTasks(context: PipelineCliContext, tasks: { id: string; sta
 function jsonReplacer(_key: string, value: unknown): unknown {
   if (typeof value === "function") return "[function]";
   return value;
+}
+
+/**
+ * The published package's version for MCP serverInfo, falling back to this
+ * internal package's own. Best-effort: identity metadata, not behavior.
+ */
+async function ownPackageVersion(): Promise<string | undefined> {
+  for (const candidate of ["../../pipeline/package.json", "../package.json"]) {
+    try {
+      const manifest = JSON.parse(await readFile(new URL(candidate, import.meta.url), "utf8")) as { version?: string };
+      if (typeof manifest.version === "string") return manifest.version;
+    } catch {
+      // Try the next candidate.
+    }
+  }
+  return undefined;
 }
 
 function githubGenerationPaths(args: string[]): { workflowPath?: string; lockPath?: string } {

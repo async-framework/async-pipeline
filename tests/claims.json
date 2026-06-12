@@ -611,6 +611,22 @@
       "tests": [
         "PROMISE: explain --diff-inputs reports the files that changed since a task last passed"
       ]
+    },
+    {
+      "id": "api.mcp-read-only-default",
+      "source": "docs/api.md",
+      "anchor": "The MCP server is read-only by default: `run_job` is exposed only when the server is started with `--allow-run`.",
+      "tests": [
+        "PROMISE: the MCP server answers initialize and exposes read-only inspection tools without run_job by default"
+      ]
+    },
+    {
+      "id": "api.mcp-run-job-evidence",
+      "source": "docs/api.md",
+      "anchor": "`run_job` acquires the same run lock, writes the same records, and replays the same cache as a CLI run",
+      "tests": [
+        "PROMISE: MCP run_job with --allow-run runs the same scheduler and records run evidence"
+      ]
     }
   ]
 }

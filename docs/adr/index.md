@@ -9,7 +9,7 @@ The records share one thesis: the repo already has the right primitives — [com
 | ADR | Title | Status | Depends on |
 | --- | --- | --- | --- |
 | [ADR-0001](0001-agent-step-type.md) | `agent()` as a first-class task step | Accepted (v1 in 0.2.2) | — |
-| [ADR-0002](0002-mcp-server.md) | An MCP server surface for the CLI | Proposed | — |
+| [ADR-0002](0002-mcp-server.md) | An MCP server surface for the CLI | Accepted (v1 in 0.2.3) | — |
 | [ADR-0003](0003-failure-context-packs.md) | Failure context packs and per-file input digests | Accepted (v1 in 0.2.3) | — |
 | [ADR-0004](0004-self-healing.md) | Bounded self-healing via `onFail` agent hooks | Proposed | 0001, 0003 |
 | [ADR-0005](0005-adversarial-review.md) | Adversarial review as a pipeline pattern | Proposed | 0001 |

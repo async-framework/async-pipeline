@@ -1,11 +1,11 @@
 # ADR-0002: An MCP Server Surface for the CLI
 
-**Status:** Proposed
+**Status:** Accepted (v1 subset shipped in 0.2.3)
 **Date:** 2026-06-12
 **Deciders:** PatrickJS
 **Index:** [Design decisions](index.md)
 
-> Proposed design. Nothing here is a shipped behavior claim; claims and tests land with the implementation per [AGENTS.md](../../AGENTS.md).
+> Shipped in 0.2.3 per Option A: `async-pipeline mcp` as a hand-rolled line-delimited JSON-RPC 2.0 stdio server with `initialize`/`ping`/`tools/list`/`tools/call`, read-only tools (`list_tasks`, `graph`, `explain_task`, `metadata`, `list_runs`, `read_run`, `diff_inputs`), and `run_job` gated behind `--allow-run` with the same lock, records, and cache as CLI runs — see [api.md](../api.md#mcp) for the reference and registered claims. Not yet shipped: resources/prompts capabilities, HTTP transport, and `matrix`/sync tools (consequences "revisit" list).
 
 ## Context
 

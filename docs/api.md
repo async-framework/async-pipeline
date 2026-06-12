@@ -689,6 +689,30 @@ Selection per environment: both `use` and `model` accept `env.var(...)`, resolve
 
 Recommended shape: give agent tasks declared `outputs` and a deterministic dependent verifier task, and keep live agent profiles out of CI-triggered job targets — commit the verified artifact and let CI run the verifier subtree (or select a `mock` profile via repository variables).
 
+## mcp
+
+`async-pipeline mcp` serves the pipeline's inspection surface over MCP (Model Context Protocol): line-delimited JSON-RPC 2.0 on stdio, implemented in this package with no added dependencies. The design is recorded in [ADR-0002](adr/0002-mcp-server.md). Every tool delegates to the same internals as the CLI's `--format json` output, so the two surfaces cannot drift apart.
+
+```sh
+async-pipeline mcp               # read-only tools
+async-pipeline mcp --allow-run   # also exposes run_job
+```
+
+Tools: `list_tasks`, `graph`, `explain_task`, `metadata`, `list_runs`, `read_run` (execution record plus any failure context packs), and `diff_inputs`. All of these are inert in the same sense as `metadata`: they read definitions, records, and files, and execute nothing. The MCP server is read-only by default: `run_job` is exposed only when the server is started with `--allow-run`. `run_job` acquires the same run lock, writes the same records, and replays the same cache as a CLI run; task output stays in task logs and never pollutes the JSON-RPC channel.
+
+Example Claude Code / MCP host configuration:
+
+```json
+{
+  "mcpServers": {
+    "async-pipeline": {
+      "command": "npx",
+      "args": ["async-pipeline", "mcp"]
+    }
+  }
+}
+```
+
 ## failure context packs
 
 On task failure the runner writes a context pack to `.async/runs/<run-id>/context/<task>.json`: the error, a redacted log tail, the reproduction command, and the input diff against the task's last passing cache entry — content digests only, never file contents. The design is recorded in [ADR-0003](adr/0003-failure-context-packs.md). Packs are bounded for small-context consumption (the log tail is capped at 4 KiB) and flow through the same secret redaction as task logs.

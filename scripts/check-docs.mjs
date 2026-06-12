@@ -18,9 +18,17 @@ function fail(message) {
 
 async function markdownFiles() {
   const files = ["README.md"];
-  for (const entry of await readdir(join(root, "docs"), { withFileTypes: true })) {
-    if (entry.isFile() && entry.name.endsWith(".md")) files.push(join("docs", entry.name));
+  async function walk(dir) {
+    for (const entry of await readdir(join(root, dir), { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await walk(path);
+        continue;
+      }
+      if (entry.isFile() && entry.name.endsWith(".md")) files.push(path);
+    }
   }
+  await walk("docs");
   return files;
 }
 

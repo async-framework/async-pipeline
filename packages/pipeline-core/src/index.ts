@@ -43,7 +43,7 @@ export interface DeferredShellCommand {
 }
 
 export type TaskRunFunction = (context: TaskContext) => void | Promise<void>;
-export type TaskStep = ShellCommand | DeferredShellCommand | TaskRunFunction;
+export type TaskStep = ShellCommand | DeferredShellCommand | AgentStep | TaskRunFunction;
 
 export interface CandidateContext {
   dir: string;
@@ -174,6 +174,36 @@ export interface EnvVarRef {
   name: string;
   values?: EnvVarMap;
   default?: string;
+}
+
+export type AgentProfileId = string;
+
+export interface AgentProfileDefinition {
+  /**
+   * Argv prefix for the adapter CLI (e.g. ["claude", "-p"]). The resolved
+   * prompt is delivered on stdin. The command never enters any cache key:
+   * cache identity comes from the profile id and model, not from where a
+   * binary happens to live.
+   */
+  command: readonly string[];
+  /** Model identity. Enters agent cache keys; supports env.var(...) selection. */
+  model: string | EnvVarRef;
+}
+
+export interface AgentStep {
+  kind: "agent";
+  /** Profile id declared in pipeline `agents`, or env.var(...) selecting one at run time. */
+  use: AgentProfileId | EnvVarRef;
+  prompt: string;
+  /** Optional model override of the profile's model. */
+  model?: string | EnvVarRef;
+}
+
+/** An agent step after run-time resolution: profile and model are concrete and the adapter argv is attached for execution. */
+export interface ResolvedAgentStep extends AgentStep {
+  use: AgentProfileId;
+  model: string;
+  command: readonly string[];
 }
 
 export interface TriggerDefinition {
@@ -352,6 +382,7 @@ export interface PipelineDefinition {
   name: string;
   env?: Record<string, EnvValue>;
   commands?: CommandPolicy;
+  agents?: Record<AgentProfileId, AgentProfileDefinition>;
   sandboxes?: Record<SandboxId, SandboxDefinition>;
   cache?: CacheRef | CacheRegistryDefinition | CacheRegistryInput | false;
   namedInputs?: Record<string, string[]>;
@@ -367,6 +398,7 @@ export interface NormalizedPipeline {
   name: string;
   env: Record<string, EnvValue>;
   commands?: CommandPolicy;
+  agents: Record<AgentProfileId, AgentProfileDefinition>;
   sandboxes: Record<SandboxId, SandboxDefinition>;
   cache: CacheRegistryDefinition;
   namedInputs: Record<string, string[]>;
@@ -458,6 +490,33 @@ export function sh(first: TemplateStringsArray | DeferredShellCommandFactory, ..
     }
   }
   return { kind: "shell", command };
+}
+
+const AGENT_STEP_FIELDS = new Set(["use", "prompt", "model"]);
+
+export function agent(options: { use: AgentProfileId | EnvVarRef; prompt: string; model?: string | EnvVarRef }): AgentStep {
+  rejectUnknownFields(AGENT_STEP_FIELDS, options, "agent() step");
+  const use = options.use;
+  if (use === undefined || use === null || (typeof use === "string" && use.length === 0)) {
+    throw pipelineError(
+      "ASYNC_PIPELINE_AGENT_INVALID",
+      'agent() requires "use": the id of a profile declared in the pipeline\'s agents block, or env.var(...) selecting one at run time.'
+    );
+  }
+  if (typeof options.prompt !== "string" || options.prompt.length === 0) {
+    throw pipelineError("ASYNC_PIPELINE_AGENT_INVALID", 'agent() requires a non-empty "prompt" string.');
+  }
+  const step: AgentStep = { kind: "agent", use, prompt: options.prompt };
+  if (options.model !== undefined) step.model = options.model;
+  return step;
+}
+
+export function isAgentStep(step: TaskStep): step is AgentStep {
+  return typeof step !== "function" && step.kind === "agent";
+}
+
+export function isResolvedAgentStep(step: TaskStep): step is ResolvedAgentStep {
+  return isAgentStep(step) && typeof step.use === "string" && typeof step.model === "string" && Array.isArray((step as ResolvedAgentStep).command);
 }
 
 export function task(definition: TaskDefinition): TaskDefinition;
@@ -583,7 +642,8 @@ export const source = {
   }
 };
 
-const PIPELINE_FIELDS = new Set(["name", "env", "commands", "sandboxes", "cache", "namedInputs", "taskDefaults", "triggers", "sync", "sources", "tasks", "jobs"]);
+const PIPELINE_FIELDS = new Set(["name", "env", "commands", "agents", "sandboxes", "cache", "namedInputs", "taskDefaults", "triggers", "sync", "sources", "tasks", "jobs"]);
+const AGENT_PROFILE_FIELDS = new Set(["command", "model"]);
 const TASK_FIELDS = new Set(["description", "dependsOn", "inputs", "outputs", "cache", "retry", "timeout", "requires", "run", "steps"]);
 const JOB_FIELDS = new Set(["description", "target", "trigger", "environment", "env", "requires", "github"]);
 const GITHUB_JOB_FIELDS = new Set(["environment", "permissions", "runsOn", "runsOnMatrix"]);
@@ -607,6 +667,23 @@ function rejectUnknownFields(known: Set<string>, value: object, where: string): 
  */
 function validateDefinitionShape(definition: PipelineDefinition): void {
   rejectUnknownFields(PIPELINE_FIELDS, definition, "Pipeline");
+  for (const [id, profile] of Object.entries(definition.agents ?? {})) {
+    rejectUnknownFields(AGENT_PROFILE_FIELDS, profile, `Agent profile "${id}"`);
+    if (!Array.isArray(profile.command) || profile.command.length === 0 || profile.command.some((part) => typeof part !== "string" || part.length === 0)) {
+      throw pipelineError(
+        "ASYNC_PIPELINE_AGENT_INVALID",
+        `Agent profile "${id}" requires "command": a non-empty array of argv strings (e.g. ["claude", "-p"]).`
+      );
+    }
+    const model = profile.model;
+    const isEnvRef = typeof model === "object" && model !== null && model.kind === "async-pipeline.env.var";
+    if (!isEnvRef && (typeof model !== "string" || model.length === 0)) {
+      throw pipelineError(
+        "ASYNC_PIPELINE_AGENT_INVALID",
+        `Agent profile "${id}" requires "model": a non-empty string or env.var(...). The model is the profile's cache identity; the command is deliberately not.`
+      );
+    }
+  }
   for (const [id, taskDefinition] of Object.entries(definition.tasks ?? {})) {
     rejectUnknownFields(TASK_FIELDS, taskDefinition, `Task "${id}"`);
   }
@@ -682,6 +759,7 @@ export function normalizePipeline(definition: PipelineDefinition): NormalizedPip
     name: definition.name,
     env: { ...(definition.env ?? {}) },
     commands: definition.commands ? normalizeCommandPolicy(definition.commands) : undefined,
+    agents: normalizeAgents(definition.agents),
     sandboxes: normalizeSandboxes(definition.sandboxes),
     cache: cacheRegistry,
     namedInputs,
@@ -698,6 +776,17 @@ export function normalizePipeline(definition: PipelineDefinition): NormalizedPip
 
 function isDefaultOnlyEnvOptions(value: EnvVarMap | { default: string }): value is { default: string } {
   return typeof value.default === "string";
+}
+
+function normalizeAgents(definitions: Record<AgentProfileId, AgentProfileDefinition> = {}): Record<AgentProfileId, AgentProfileDefinition> {
+  const normalized: Record<AgentProfileId, AgentProfileDefinition> = {};
+  for (const [id, profile] of Object.entries(definitions)) {
+    normalized[id] = {
+      command: [...profile.command],
+      model: typeof profile.model === "string" ? profile.model : { ...profile.model }
+    };
+  }
+  return normalized;
 }
 
 function normalizeSandboxes(definitions: Record<SandboxId, SandboxDefinition> = {}): Record<SandboxId, SandboxDefinition> {
@@ -777,6 +866,16 @@ export function validatePipeline(pipeline: NormalizedPipeline): void {
     }
     if (taskDefinition.cache.enabled && taskDefinition.cache.store) {
       assertCacheStore(pipeline.cache, parseCacheRef(cacheRefFromStoreOptions(taskDefinition.cache, pipeline.cache.default)));
+    }
+    for (const step of taskDefinition.steps) {
+      if (!isAgentStep(step) || typeof step.use !== "string") continue;
+      if (!pipeline.agents[step.use]) {
+        const known = Object.keys(pipeline.agents).sort();
+        throw pipelineError(
+          "ASYNC_PIPELINE_AGENT_UNKNOWN",
+          `Task "${taskDefinition.id}" uses agent profile "${step.use}", which is not declared in the pipeline's agents block.${known.length > 0 ? ` Known profiles: ${known.join(", ")}.` : " No agent profiles are declared."}`
+        );
+      }
     }
   }
 

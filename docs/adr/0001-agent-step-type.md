@@ -1,11 +1,11 @@
 # ADR-0001: `agent()` as a First-Class Task Step
 
-**Status:** Proposed
+**Status:** Accepted (v1 subset shipped in 0.2.2)
 **Date:** 2026-06-12
 **Deciders:** PatrickJS
 **Index:** [Design decisions](index.md)
 
-> Proposed design. Nothing here is a shipped behavior claim; claims and tests land with the implementation per [AGENTS.md](../../AGENTS.md).
+> Shipped in 0.2.2: the `agents` profile block, the `agent()` step, prompt/transcript evidence under `.async/runs/<run-id>/agents/` with secret redaction, artifact cache semantics (profile id + model + prompt in the key, command path excluded), and `env.var(...)` selection — see [api.md](../api.md#agents) for the reference and registered claims. Not yet shipped from this record: the per-step default-deny command policy for the agent's *own* tool calls (decision 3 — the adapter spawn runs through the task's executor like any command, but its internal tool use is not yet governed), the missing-outputs validation warning (decision 5, second half), and the mocked example under `examples/` (action item 5).
 
 ## Context
 

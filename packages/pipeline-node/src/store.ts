@@ -2,7 +2,7 @@ import { randomBytes, createHash, type Hash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { copyFile, mkdir, open, readdir, readFile, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative } from "node:path";
-import type { CandidateContext, ExecutionRecord, NormalizedPipeline, NormalizedTask, TaskCacheOptions, TaskResult, TaskSourceContext, TaskStep } from "@async/pipeline-core";
+import type { CandidateContext, EnvVarRef, ExecutionRecord, NormalizedPipeline, NormalizedTask, TaskCacheOptions, TaskResult, TaskSourceContext, TaskStep } from "@async/pipeline-core";
 import { expandInputs } from "@async/pipeline-core";
 
 export interface PipelineStore {
@@ -87,6 +87,20 @@ export async function writeTaskLog(store: PipelineStore, runId: string, taskId: 
   const logDir = join(store.runsDir, runId, "logs");
   await mkdir(logDir, { recursive: true });
   await writeFileAtomic(join(logDir, `${safeFileName(taskId)}.log`), log);
+}
+
+export async function writeAgentPrompt(store: PipelineStore, runId: string, taskId: string, prompt: string): Promise<string> {
+  const agentDir = join(store.runsDir, runId, "agents");
+  await mkdir(agentDir, { recursive: true });
+  const path = join(agentDir, `${safeFileName(taskId)}.prompt.txt`);
+  await writeFileAtomic(path, prompt);
+  return path;
+}
+
+export async function writeAgentTranscript(store: PipelineStore, runId: string, taskId: string, transcript: string): Promise<void> {
+  const agentDir = join(store.runsDir, runId, "agents");
+  await mkdir(agentDir, { recursive: true });
+  await writeFileAtomic(join(agentDir, `${safeFileName(taskId)}.jsonl`), transcript);
 }
 
 export async function readCacheEntry(store: PipelineStore, cacheKey: string): Promise<TaskResult | null> {
@@ -597,8 +611,25 @@ function serializeSteps(steps: readonly TaskStep[]): unknown[] {
   return steps.map((step) => {
     if (typeof step === "function") return "[function]";
     if (step.kind === "deferred-shell") return { kind: "deferred-shell" };
+    if (step.kind === "agent") {
+      // Agent cache identity is profile id + model + prompt. The adapter
+      // command argv is deliberately excluded, like absolute machine paths:
+      // where a binary happens to live must never dirty the cache, while a
+      // different profile, model, or prompt must.
+      return {
+        kind: "agent",
+        use: serializeAgentValue(step.use),
+        model: step.model === undefined ? undefined : serializeAgentValue(step.model),
+        prompt: step.prompt
+      };
+    }
     return step;
   });
+}
+
+function serializeAgentValue(value: string | EnvVarRef): unknown {
+  if (typeof value === "string") return value;
+  return { env: value.name, values: value.values, default: value.default };
 }
 
 function serializeCacheOptions(cache: TaskCacheOptions): unknown {

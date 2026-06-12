@@ -538,6 +538,47 @@
       "tests": [
         "run prints failed task reasons to stderr next to the final status"
       ]
+    },
+    {
+      "id": "api.agent-cache-key",
+      "source": "docs/api.md",
+      "anchor": "Agent cache keys include the resolved profile id, model, and prompt — never the adapter's command path.",
+      "tests": [
+        "PROMISE: agent cache keys ignore the adapter binary path and change with model or prompt"
+      ]
+    },
+    {
+      "id": "api.agent-cache-replay",
+      "source": "docs/api.md",
+      "anchor": "A cached agent task replays its declared outputs without invoking the adapter.",
+      "tests": [
+        "PROMISE: a cached agent task replays declared outputs without re-invoking the adapter"
+      ]
+    },
+    {
+      "id": "api.agent-transcript-redaction",
+      "source": "docs/api.md",
+      "anchor": "A request/response transcript is written to `.async/runs/<run-id>/agents/<task>.jsonl`. Transcripts and task logs redact resolved secret values.",
+      "tests": [
+        "PROMISE: an agent step runs the selected profile and records a redacted transcript under the run's agents directory"
+      ]
+    },
+    {
+      "id": "api.agent-env-selection",
+      "source": "docs/api.md",
+      "anchor": "both `use` and `model` accept `env.var(...)`, resolved at run time from the task env",
+      "tests": [
+        "PROMISE: env.var(...) selects the agent profile and model at run time"
+      ]
+    },
+    {
+      "id": "changelog.agent-cache-replay",
+      "source": "CHANGELOG.md",
+      "anchor": "keys include the resolved profile id, model, and prompt — never the adapter's command path — so a cached agent task replays declared outputs without invoking the adapter",
+      "tests": [
+        "PROMISE: agent cache keys ignore the adapter binary path and change with model or prompt",
+        "PROMISE: a cached agent task replays declared outputs without re-invoking the adapter"
+      ]
     }
   ]
 }

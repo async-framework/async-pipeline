@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.2 - 2026-06-12
+
+### Features
+
+- Agent steps: `agent({ use, prompt, model? })` runs a declared adapter profile from the new pipeline `agents` block (`{ command: ["claude", "-p"], model: "..." }`). The prompt is delivered on stdin via a prompt file recorded under `.async/runs/<run-id>/agents/`, and every invocation writes a request/response transcript (`<task>.jsonl`) redacted like task logs. Agent output is cached as an artifact: keys include the resolved profile id, model, and prompt — never the adapter's command path — so a cached agent task replays declared outputs without invoking the adapter. `use` and `model` accept `env.var(...)` for per-environment selection (e.g. a `mock` profile in CI). Profiles reject unknown fields with `ASYNC_PIPELINE_UNKNOWN_FIELD`; undeclared profile references fail with `ASYNC_PIPELINE_AGENT_UNKNOWN`. Design: docs/adr/0001-agent-step-type.md; reference: docs/api.md "agents".
+
 ## 0.2.1 - 2026-06-12
 
 ### Fixes

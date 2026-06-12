@@ -643,6 +643,52 @@ await runJob(pipeline, {
 });
 ```
 
+## agents
+
+`agents` declares named adapter profiles for `agent(...)` task steps: an argv prefix for an agent CLI plus the model identity. The design is recorded in [ADR-0001](adr/0001-agent-step-type.md).
+
+```ts
+import { agent, definePipeline, env, job, sh, task } from "@async/pipeline";
+
+export default definePipeline({
+  name: "app",
+  agents: {
+    claude: {
+      command: ["claude", "-p"],
+      model: env.var("AGENT_MODEL", { default: "claude-sonnet-4-6" })
+    },
+    mock: { command: ["node", "scripts/mock-agent.mjs"], model: "mock" }
+  },
+  tasks: {
+    "upgrade-guide": task({
+      inputs: ["CHANGELOG.md"],
+      outputs: ["docs/upgrade.md"],
+      cache: true,
+      run: agent({
+        use: env.var("ASYNC_AGENT", { default: "claude" }),
+        prompt: "Write docs/upgrade.md from the Breaking sections in CHANGELOG.md."
+      })
+    }),
+    "verify-guide": task({
+      dependsOn: ["upgrade-guide"],
+      inputs: ["docs/upgrade.md", "scripts/check-docs.mjs"],
+      run: sh`node scripts/check-docs.mjs`
+    })
+  },
+  jobs: {
+    docs: job({ target: "verify-guide" })
+  }
+});
+```
+
+Execution: the resolved prompt is written to `.async/runs/<run-id>/agents/<task>.prompt.txt` and delivered to the adapter on stdin; the adapter runs through the task's command executor (host or selected sandbox) with `ASYNC_PIPELINE_AGENT_PROFILE`, `ASYNC_PIPELINE_AGENT_MODEL`, and `ASYNC_PIPELINE_AGENT_PROMPT_FILE` in its env, from the task's `cwd`. A request/response transcript is written to `.async/runs/<run-id>/agents/<task>.jsonl`. Transcripts and task logs redact resolved secret values.
+
+Cache semantics: an agent step's output is an artifact, keyed like any task. Agent cache keys include the resolved profile id, model, and prompt — never the adapter's command path. Moving a binary must not dirty the cache; a different profile, model, prompt, or declared input must. A cached agent task replays its declared outputs without invoking the adapter. Use `--force` for a deliberately fresh sample with unchanged inputs.
+
+Selection per environment: both `use` and `model` accept `env.var(...)`, resolved at run time from the task env. A profile that resolves to an undeclared id fails with `ASYNC_PIPELINE_AGENT_UNKNOWN`; statically referencing an undeclared profile fails at `definePipeline` time with the same code. Profiles reject unknown fields with `ASYNC_PIPELINE_UNKNOWN_FIELD`; `command` must be a non-empty argv array and `model` is required, because the model — not the binary location — is the profile's cache identity. Credentials belong in task `env` via `env.secret(...)`, never in the profile command line.
+
+Recommended shape: give agent tasks declared `outputs` and a deterministic dependent verifier task, and keep live agent profiles out of CI-triggered job targets — commit the verified artifact and let CI run the verifier subtree (or select a `mock` profile via repository variables).
+
 ## command policy
 
 `commands` governs CLI/tool/agent command boundaries. It is separate from task shell execution, which still uses the run's command executor.

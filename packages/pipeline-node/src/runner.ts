@@ -3,9 +3,9 @@ import { randomUUID } from "node:crypto";
 import { availableParallelism } from "node:os";
 import { posix, relative } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import type { CandidateContext, CommandAction, CommandOutputPolicy, CommandPolicy, EnvValue, ExecutionRecord, NormalizedPipeline, NormalizedTask, SandboxDefinition, SandboxId, ShellCommand, TaskContext, TaskResult, TaskRunFunction, TaskSourceContext, TaskStep } from "@async/pipeline-core";
-import { sh, tasksForJob } from "@async/pipeline-core";
-import { acquireRunLock, computeTaskCacheKey, createStore, outputFilesExist, readCacheEntry, resolveOutputFiles, restoreCacheOutputs, writeCacheEntry, writeExecution, writeTaskLog, type PipelineStore } from "./store.js";
+import type { AgentStep, CandidateContext, CommandAction, CommandOutputPolicy, CommandPolicy, EnvValue, EnvVarRef, ExecutionRecord, NormalizedPipeline, NormalizedTask, ResolvedAgentStep, SandboxDefinition, SandboxId, ShellCommand, TaskContext, TaskResult, TaskRunFunction, TaskSourceContext, TaskStep } from "@async/pipeline-core";
+import { isAgentStep, isResolvedAgentStep, pipelineError, sh, tasksForJob } from "@async/pipeline-core";
+import { acquireRunLock, computeTaskCacheKey, createStore, outputFilesExist, readCacheEntry, resolveOutputFiles, restoreCacheOutputs, writeAgentPrompt, writeAgentTranscript, writeCacheEntry, writeExecution, writeTaskLog, type PipelineStore } from "./store.js";
 import { createRunPlan, sourceContext, type ResolvedSource } from "./sources.js";
 
 export interface CommandResult {
@@ -537,7 +537,7 @@ export async function planJob(pipeline: NormalizedPipeline, options: { id: strin
         source: taskDefinition.source,
         writeLog() {}
       });
-      const steps = await resolveTaskSteps(taskDefinition.steps, taskContext);
+      const steps = await resolveTaskSteps(plan.pipeline.agents, taskDefinition.steps, taskContext);
       const taskSource = taskDefinition.source?.name ? plan.sources[taskDefinition.source.name] : undefined;
       const prepareCommands = taskSource
         ? (await resolvePrepareCommands(taskSource, {
@@ -668,7 +668,7 @@ async function runTask(
       .filter((value): value is string => typeof value === "string" && value.length > 0)
   ];
   const redactLog = (log: string): string => redactKnownValues(log, redactValues);
-  const resolvedSteps = await resolveTaskSteps(taskDefinition.steps, context);
+  const resolvedSteps = await resolveTaskSteps(pipeline.agents, taskDefinition.steps, context);
   const cacheKey = await computeTaskCacheKey(pipeline, taskDefinition, options.cwd, {
     candidate: options.candidate,
     dependencyFingerprints: options.dependencyFingerprints,
@@ -723,6 +723,30 @@ async function runTask(
       for (const step of resolvedSteps) {
         if (typeof step === "function") {
           await runFunctionStep(step, context, taskDefinition.timeoutMs);
+          continue;
+        }
+        if (isAgentStep(step)) {
+          if (!isResolvedAgentStep(step)) {
+            throw new Error(`Agent step for task "${taskDefinition.id}" was not resolved.`);
+          }
+          const result = await runAgentStep(step, taskDefinition, {
+            executor: options.executor,
+            cwd: options.cwd,
+            env: taskEnv,
+            echo: options.echo,
+            redactValues,
+            forwardEnvKeys,
+            store: options.store,
+            runId: options.runId
+          });
+          taskLog.append(result.stdout);
+          taskLog.append(result.stderr);
+          if (result.timedOut) {
+            throw new Error(`Task "${taskDefinition.id}" timed out after ${taskDefinition.timeoutMs}ms.`);
+          }
+          if (result.code !== 0) {
+            throw new Error(`Agent step failed with exit code ${result.code} (profile "${step.use}", model "${step.model}").`);
+          }
           continue;
         }
         if (!isShellCommand(step)) {
@@ -784,6 +808,43 @@ async function runTask(
   return result;
 }
 
+async function runAgentStep(
+  step: ResolvedAgentStep,
+  taskDefinition: NormalizedTask,
+  options: { executor: CommandExecutor; cwd: string; env: NodeJS.ProcessEnv; echo?: boolean; redactValues?: readonly string[]; forwardEnvKeys?: readonly string[]; store: PipelineStore; runId: string }
+): Promise<CommandResult> {
+  // The prompt travels as a file redirected to the adapter's stdin: shell-safe
+  // for arbitrary prompt text, and the prompt becomes run evidence alongside
+  // the transcript. The adapter also sees profile/model/prompt-file env keys
+  // so wrapper scripts can stay generic.
+  const promptPath = await writeAgentPrompt(options.store, options.runId, taskDefinition.id, step.prompt);
+  const command = `${step.command.map((part) => shellEscape(part)).join(" ")} < ${shellEscape(promptPath)}`;
+  const env: NodeJS.ProcessEnv = {
+    ...options.env,
+    ASYNC_PIPELINE_AGENT_PROFILE: step.use,
+    ASYNC_PIPELINE_AGENT_MODEL: step.model,
+    ASYNC_PIPELINE_AGENT_PROMPT_FILE: promptPath
+  };
+  const startedAt = new Date().toISOString();
+  const started = Date.now();
+  const result = await options.executor.runShell(command, {
+    cwd: options.cwd,
+    env,
+    task: taskDefinition,
+    timeoutMs: taskDefinition.timeoutMs,
+    echo: options.echo,
+    redactValues: options.redactValues,
+    forwardEnvKeys: options.forwardEnvKeys
+  });
+  const redact = (value: string): string => redactKnownValues(value, options.redactValues ?? []);
+  const transcript = [
+    JSON.stringify({ type: "request", at: startedAt, task: taskDefinition.id, profile: step.use, model: step.model, prompt: redact(step.prompt) }),
+    JSON.stringify({ type: "response", at: new Date().toISOString(), durationMs: Date.now() - started, code: result.code, timedOut: result.timedOut ?? false, stdout: redact(result.stdout), stderr: redact(result.stderr) })
+  ].join("\n");
+  await writeAgentTranscript(options.store, options.runId, taskDefinition.id, `${transcript}\n`);
+  return result;
+}
+
 async function runShellStep(
   step: ShellCommand,
   taskDefinition: NormalizedTask,
@@ -828,7 +889,7 @@ async function runSourcePrepare(
       log.append(`${message}\n`);
     }
   });
-  const steps = await resolveTaskSteps(source.definition.prepare, context);
+  const steps = await resolveTaskSteps({}, source.definition.prepare, context);
 
   try {
     for (const step of steps) {
@@ -899,15 +960,19 @@ async function resolvePrepareCommands(
     source: sourceContext(source),
     writeLog() {}
   });
-  const steps = await resolveTaskSteps(source.definition.prepare, context);
+  const steps = await resolveTaskSteps({}, source.definition.prepare, context);
   return steps.filter(isShellCommand);
 }
 
-async function resolveTaskSteps(steps: readonly TaskStep[], context: TaskContext): Promise<TaskStep[]> {
+async function resolveTaskSteps(agents: NormalizedPipeline["agents"], steps: readonly TaskStep[], context: TaskContext): Promise<TaskStep[]> {
   const resolved: TaskStep[] = [];
   for (const step of steps) {
     if (typeof step === "function" || step.kind === "shell") {
       resolved.push(step);
+      continue;
+    }
+    if (step.kind === "agent") {
+      resolved.push(resolveAgentStep(agents, step, context));
       continue;
     }
     const command = await step.command(context);
@@ -917,6 +982,37 @@ async function resolveTaskSteps(steps: readonly TaskStep[], context: TaskContext
     resolved.push(command);
   }
   return resolved;
+}
+
+/** Mirrors env.var(...) resolution in resolveEnvDefinitions: selector from the task env, optional default, optional value map. */
+function resolveAgentValue(value: string | EnvVarRef, env: Record<string, string | undefined>, what: string, taskId: string): string {
+  if (typeof value === "string") return value;
+  const selector = env[value.name] ?? value.default;
+  if (selector === undefined || selector === "") {
+    throw new Error(`Required variable "${value.name}" for ${what} is not available for task "${taskId}".`);
+  }
+  if (value.values) {
+    const mapped = value.values[selector];
+    if (mapped === undefined) {
+      throw new Error(`Variable "${value.name}" value "${selector}" is not mapped for ${what} in task "${taskId}".`);
+    }
+    return mapped;
+  }
+  return selector;
+}
+
+function resolveAgentStep(agents: NormalizedPipeline["agents"], step: AgentStep, context: TaskContext): ResolvedAgentStep {
+  const use = resolveAgentValue(step.use, context.env, "the agent profile selection", context.taskId);
+  const profile = agents[use];
+  if (!profile) {
+    const known = Object.keys(agents).sort();
+    throw pipelineError(
+      "ASYNC_PIPELINE_AGENT_UNKNOWN",
+      `Task "${context.taskId}" resolved agent profile "${use}", which is not declared in the pipeline's agents block.${known.length > 0 ? ` Known profiles: ${known.join(", ")}.` : " No agent profiles are declared."}`
+    );
+  }
+  const model = resolveAgentValue(step.model ?? profile.model, context.env, `agent profile "${use}" model`, context.taskId);
+  return { kind: "agent", use, prompt: step.prompt, model, command: [...profile.command] };
 }
 
 function createTaskContext(

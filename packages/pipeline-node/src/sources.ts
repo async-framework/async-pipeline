@@ -108,7 +108,7 @@ export async function resolveSources(
       ref: sourceDefinition.type === "git" ? sourceDefinition.ref : undefined,
       commit,
       dirty,
-      prepare: sourceDefinition.prepare.map((step) => typeof step === "function" ? "[function]" : step.kind === "deferred-shell" ? "[deferred-shell]" : step.command)
+      prepare: sourceDefinition.prepare.map((step) => typeof step === "function" ? "[function]" : step.kind === "deferred-shell" ? "[deferred-shell]" : step.kind === "agent" ? "[agent]" : step.command)
     };
 
     resolved[sourceDefinition.id] = {

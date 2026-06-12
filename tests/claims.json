@@ -579,6 +579,38 @@
         "PROMISE: agent cache keys ignore the adapter binary path and change with model or prompt",
         "PROMISE: a cached agent task replays declared outputs without re-invoking the adapter"
       ]
+    },
+    {
+      "id": "api.context-pack-on-failure",
+      "source": "docs/api.md",
+      "anchor": "On task failure the runner writes a context pack to `.async/runs/<run-id>/context/<task>.json`: the error, a redacted log tail, the reproduction command, and the input diff against the task's last passing cache entry — content digests only, never file contents.",
+      "tests": [
+        "PROMISE: failed tasks write a context pack with a redacted log tail and an input diff against the last passing run"
+      ]
+    },
+    {
+      "id": "api.context-pack-baseline-missing",
+      "source": "docs/api.md",
+      "anchor": "A task that has never passed reports `baselineMissing` instead of a diff.",
+      "tests": [
+        "PROMISE: a task that has never passed reports a missing baseline instead of a diff"
+      ]
+    },
+    {
+      "id": "api.cache-input-manifests",
+      "source": "docs/api.md",
+      "anchor": "every cache entry persists a per-file digest manifest (`inputs.json`) for the input state that produced it",
+      "tests": [
+        "PROMISE: cache entries persist per-file input digests for the entry's input state"
+      ]
+    },
+    {
+      "id": "api.explain-diff-inputs",
+      "source": "docs/api.md",
+      "anchor": "`explain <task> --diff-inputs` reports the files that changed since the task last passed",
+      "tests": [
+        "PROMISE: explain --diff-inputs reports the files that changed since a task last passed"
+      ]
     }
   ]
 }

@@ -1,11 +1,12 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { availableParallelism } from "node:os";
-import { posix, relative } from "node:path";
+import { join, posix, relative } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import type { AgentStep, CandidateContext, CommandAction, CommandOutputPolicy, CommandPolicy, EnvValue, EnvVarRef, ExecutionRecord, NormalizedPipeline, NormalizedTask, ResolvedAgentStep, SandboxDefinition, SandboxId, ShellCommand, TaskContext, TaskResult, TaskRunFunction, TaskSourceContext, TaskStep } from "@async/pipeline-core";
 import { isAgentStep, isResolvedAgentStep, pipelineError, sh, tasksForJob } from "@async/pipeline-core";
-import { acquireRunLock, computeTaskCacheKey, createStore, outputFilesExist, readCacheEntry, resolveOutputFiles, restoreCacheOutputs, writeAgentPrompt, writeAgentTranscript, writeCacheEntry, writeExecution, writeTaskLog, type PipelineStore } from "./store.js";
+import { acquireRunLock, computeTaskCacheKey, computeTaskCacheKeyDetailed, createStore, diffInputManifests, outputFilesExist, readCacheEntry, readCacheInputManifest, readTaskBaseline, resolveOutputFiles, restoreCacheOutputs, writeAgentPrompt, writeAgentTranscript, writeCacheEntry, writeCacheInputManifest, writeContextPack, writeExecution, writeTaskBaseline, writeTaskLog, type PipelineStore, type TaskContextPack, type TaskInputManifest } from "./store.js";
 import { createRunPlan, sourceContext, type ResolvedSource } from "./sources.js";
 
 export interface CommandResult {
@@ -669,7 +670,7 @@ async function runTask(
   ];
   const redactLog = (log: string): string => redactKnownValues(log, redactValues);
   const resolvedSteps = await resolveTaskSteps(pipeline.agents, taskDefinition.steps, context);
-  const cacheKey = await computeTaskCacheKey(pipeline, taskDefinition, options.cwd, {
+  const { cacheKey, inputs: inputManifest } = await computeTaskCacheKeyDetailed(pipeline, taskDefinition, options.cwd, {
     candidate: options.candidate,
     dependencyFingerprints: options.dependencyFingerprints,
     prepareCommands: (options.sourcePrepareCommands ?? []).map((command) => command.command),
@@ -694,6 +695,12 @@ async function runTask(
           durationMs: Date.now() - started
         };
         await writeTaskLog(options.store, options.runId, taskDefinition.id, `[cache hit] ${cacheKey}\n`);
+        // A hit proves this input state passes: refresh the diff baseline, and
+        // backfill the digest manifest for entries created before 0.2.3.
+        if ((await readCacheInputManifest(options.store, cacheKey)) === null) {
+          await writeCacheInputManifest(options.store, cacheKey, inputManifest);
+        }
+        await writeTaskBaseline(options.store, taskDefinition.id, cacheKey);
         return result;
       }
       taskLog.append(`[cache miss] ${cacheHit.reason}\n`);
@@ -778,6 +785,8 @@ async function runTask(
       await writeTaskLog(options.store, options.runId, taskDefinition.id, redactLog(taskLog.read()));
       if (taskDefinition.cache.enabled) {
         await writeTaskCacheEntry(taskDefinition, options.store, cacheKey, result, options.cwd);
+        await writeCacheInputManifest(options.store, cacheKey, inputManifest);
+        await writeTaskBaseline(options.store, taskDefinition.id, cacheKey);
       }
       return result;
     } catch (error) {
@@ -804,8 +813,90 @@ async function runTask(
     error: lastError,
     metadata
   };
-  await writeTaskLog(options.store, options.runId, taskDefinition.id, redactLog(taskLog.read()));
+  const redactedLog = redactLog(taskLog.read());
+  await writeTaskLog(options.store, options.runId, taskDefinition.id, redactedLog);
+  try {
+    await writeFailureContextPack({
+      store: options.store,
+      runId: options.runId,
+      taskDefinition,
+      error: redactLog(lastError),
+      attempts,
+      cacheKey,
+      redactedLog,
+      inputManifest,
+      rootCwd: options.rootCwd
+    });
+  } catch {
+    // Packs are evidence, not state: failing to write one must not mask the task failure.
+  }
   return result;
+}
+
+const CONTEXT_PACK_LOG_TAIL_BYTES = 4096;
+
+/**
+ * ADR-0003: a bounded, machine-readable failure summary next to the run
+ * record — the failing task, a redacted log tail, the reproduction command,
+ * the input diff against the task's last passing cache entry (digests only,
+ * never contents), and the registered claims whose test titles appear in the
+ * log.
+ */
+async function writeFailureContextPack(options: {
+  store: PipelineStore;
+  runId: string;
+  taskDefinition: NormalizedTask;
+  error: string;
+  attempts: number;
+  cacheKey: string | undefined;
+  redactedLog: string;
+  inputManifest: TaskInputManifest;
+  rootCwd: string;
+}): Promise<void> {
+  let inputDiff: TaskContextPack["inputDiff"] = { baselineMissing: true };
+  const baseline = await readTaskBaseline(options.store, options.taskDefinition.id);
+  if (baseline) {
+    const baselineManifest = await readCacheInputManifest(options.store, baseline.cacheKey);
+    if (baselineManifest) {
+      inputDiff = {
+        baselineCacheKey: baseline.cacheKey,
+        baselineRecordedAt: baseline.recordedAt,
+        ...diffInputManifests(baselineManifest, options.inputManifest)
+      };
+    }
+  }
+  const claims = await matchRegisteredClaims(options.rootCwd, options.redactedLog);
+  const pack: TaskContextPack = {
+    schemaVersion: 1,
+    task: options.taskDefinition.id,
+    runId: options.runId,
+    status: "failed",
+    error: options.error,
+    attempts: options.attempts,
+    cacheKey: options.cacheKey,
+    reproduce: `async-pipeline run-task ${options.taskDefinition.id}`,
+    logTail: options.redactedLog.slice(-CONTEXT_PACK_LOG_TAIL_BYTES),
+    inputDiff,
+    ...(claims.length > 0 ? { claims } : {})
+  };
+  await writeContextPack(options.store, options.runId, options.taskDefinition.id, pack);
+}
+
+/** When the project keeps a claims registry, name the promises this failure touches. */
+async function matchRegisteredClaims(rootCwd: string, log: string): Promise<string[]> {
+  try {
+    const registry = JSON.parse(await readFile(join(rootCwd, "tests", "claims.json"), "utf8")) as { claims?: { id?: string; tests?: string[] }[] };
+    const matched: string[] = [];
+    for (const claim of registry.claims ?? []) {
+      if (!claim.id || !Array.isArray(claim.tests)) continue;
+      if (claim.tests.some((title) => typeof title === "string" && title.length > 0 && log.includes(title))) {
+        matched.push(claim.id);
+      }
+    }
+    return matched.sort();
+  } catch {
+    return [];
+  }
 }
 
 async function runAgentStep(

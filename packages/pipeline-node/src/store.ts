@@ -209,7 +209,29 @@ export async function pruneCacheEntries(cwd: string, maxAgeDays: number): Promis
       removed += 1;
     }
   }
+  await pruneOrphanedBaselines(cwd, cacheDir);
   return removed;
+}
+
+/** Baseline pointers whose cache entry was pruned are stale: drop them so diffs report a missing baseline instead of dangling. */
+async function pruneOrphanedBaselines(cwd: string, cacheDir: string): Promise<void> {
+  const baselinesDir = join(cwd, ".async", "cache", "baselines");
+  let entries;
+  try {
+    entries = await readdir(baselinesDir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+    const path = join(baselinesDir, entry.name);
+    try {
+      const baseline = JSON.parse(await readFile(path, "utf8")) as TaskBaseline;
+      await stat(join(cacheDir, baseline.cacheKey, "result.json"));
+    } catch {
+      await rm(path, { force: true });
+    }
+  }
 }
 
 export async function writeCacheEntry(
@@ -231,6 +253,143 @@ export async function computeTaskCacheKey(
   cwd: string,
   options: TaskCacheKeyOptions = {}
 ): Promise<string> {
+  return (await computeTaskCacheKeyDetailed(pipeline, taskDefinition, cwd, options)).cacheKey;
+}
+
+export async function writeCacheInputManifest(store: PipelineStore, cacheKey: string, manifest: TaskInputManifest): Promise<void> {
+  const cacheEntryDir = join(store.cacheDir, cacheKey);
+  await mkdir(cacheEntryDir, { recursive: true });
+  await writeFileAtomic(join(cacheEntryDir, "inputs.json"), `${JSON.stringify(manifest, null, 2)}\n`);
+}
+
+export async function readCacheInputManifest(store: PipelineStore, cacheKey: string): Promise<TaskInputManifest | null> {
+  try {
+    const parsed = JSON.parse(await readFile(join(store.cacheDir, cacheKey, "inputs.json"), "utf8")) as TaskInputManifest;
+    if (parsed?.schemaVersion !== 1 || typeof parsed.files !== "object" || parsed.files === null) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+export interface TaskBaseline {
+  schemaVersion: 1;
+  taskId: string;
+  cacheKey: string;
+  recordedAt: string;
+}
+
+function baselinePath(store: PipelineStore, taskId: string): string {
+  return join(store.asyncDir, "cache", "baselines", `${safeFileName(taskId)}.json`);
+}
+
+/** Points at the task's most recent passing cache entry: the diff baseline. */
+export async function writeTaskBaseline(store: PipelineStore, taskId: string, cacheKey: string): Promise<void> {
+  const path = baselinePath(store, taskId);
+  await mkdir(dirname(path), { recursive: true });
+  const baseline: TaskBaseline = { schemaVersion: 1, taskId, cacheKey, recordedAt: new Date().toISOString() };
+  await writeFileAtomic(path, `${JSON.stringify(baseline, null, 2)}\n`);
+}
+
+export async function readTaskBaseline(store: PipelineStore, taskId: string): Promise<TaskBaseline | null> {
+  try {
+    const parsed = JSON.parse(await readFile(baselinePath(store, taskId), "utf8")) as TaskBaseline;
+    if (parsed?.schemaVersion !== 1 || typeof parsed.cacheKey !== "string") return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+export interface InputDiff {
+  added: string[];
+  removed: string[];
+  changed: string[];
+}
+
+export function diffInputManifests(baseline: TaskInputManifest, current: TaskInputManifest): InputDiff {
+  const added: string[] = [];
+  const removed: string[] = [];
+  const changed: string[] = [];
+  for (const [path, digest] of Object.entries(current.files)) {
+    const before = baseline.files[path];
+    if (before === undefined) added.push(path);
+    else if (before !== digest) changed.push(path);
+  }
+  for (const path of Object.keys(baseline.files)) {
+    if (current.files[path] === undefined) removed.push(path);
+  }
+  return { added: added.sort(), removed: removed.sort(), changed: changed.sort() };
+}
+
+export interface TaskContextPack {
+  schemaVersion: 1;
+  task: string;
+  runId: string;
+  status: "failed";
+  error: string;
+  attempts: number;
+  cacheKey?: string;
+  reproduce: string;
+  /** Redacted tail of the task log, capped well below the log cap. */
+  logTail: string;
+  inputDiff:
+    | ({ baselineCacheKey: string; baselineRecordedAt: string } & InputDiff)
+    | { baselineMissing: true };
+  /** Claim ids from tests/claims.json whose registered test titles appear in the task log. */
+  claims?: string[];
+}
+
+export async function writeContextPack(store: PipelineStore, runId: string, taskId: string, pack: TaskContextPack): Promise<void> {
+  const contextDir = join(store.runsDir, runId, "context");
+  await mkdir(contextDir, { recursive: true });
+  await writeFileAtomic(join(contextDir, `${safeFileName(taskId)}.json`), `${JSON.stringify(pack, null, 2)}\n`);
+}
+
+export async function readContextPacks(store: PipelineStore, runId: string): Promise<TaskContextPack[]> {
+  const contextDir = join(store.runsDir, runId, "context");
+  let entries: string[];
+  try {
+    entries = await readdir(contextDir);
+  } catch {
+    return [];
+  }
+  const packs: TaskContextPack[] = [];
+  for (const entry of entries.sort()) {
+    if (!entry.endsWith(".json")) continue;
+    try {
+      packs.push(JSON.parse(await readFile(join(contextDir, entry), "utf8")) as TaskContextPack);
+    } catch {
+      // Unreadable packs are skipped, not fatal: packs are evidence, not state.
+    }
+  }
+  return packs;
+}
+
+export interface TaskInputManifest {
+  schemaVersion: 1;
+  /** Relative input path -> `sha256:<hex>` content digest, or `[missing]`. */
+  files: Record<string, string>;
+}
+
+export interface TaskCacheKeyDetails {
+  cacheKey: string;
+  inputs: TaskInputManifest;
+}
+
+/**
+ * The cache key plus the per-file digest manifest computed in the same input
+ * walk. The walk already streams every input file; capturing per-file digests
+ * here is what makes "which inputs changed since this task last passed"
+ * answerable later without re-hashing against a baseline that no longer
+ * exists (ADR-0003).
+ */
+export async function computeTaskCacheKeyDetailed(
+  pipeline: NormalizedPipeline,
+  taskDefinition: NormalizedTask,
+  cwd: string,
+  options: TaskCacheKeyOptions = {}
+): Promise<TaskCacheKeyDetails> {
   const hash = createHash("sha256");
   hash.update(JSON.stringify({
     pipeline: pipeline.name,
@@ -257,23 +416,47 @@ export async function computeTaskCacheKey(
     hash.update(input);
   }
 
+  const files: Record<string, string> = {};
   for (const input of inputFiles) {
     hash.update(input);
-    await hashFileInto(hash, join(cwd, input));
+    files[input] = await hashFileInto(hash, join(cwd, input));
   }
 
-  return hash.digest("hex");
+  return { cacheKey: hash.digest("hex"), inputs: { schemaVersion: 1, files } };
 }
 
-/** Stream file contents into a hash so huge inputs never load fully into memory. */
-async function hashFileInto(hash: Hash, path: string): Promise<void> {
+/**
+ * The digest manifest for a task's current input state, without computing a
+ * cache key: no step resolution, no deferred callbacks — file reads only.
+ * Powers `explain <task> --diff-inputs`.
+ */
+export async function computeTaskInputManifest(pipeline: NormalizedPipeline, taskDefinition: NormalizedTask, cwd: string): Promise<TaskInputManifest> {
+  const expandedInputs = expandInputs(pipeline, taskDefinition.inputs);
+  const inputFiles = await resolveInputFiles(cwd, expandedInputs, { exclude: taskDefinition.outputs });
+  const files: Record<string, string> = {};
+  const discarded = createHash("sha256");
+  for (const input of inputFiles) {
+    files[input] = await hashFileInto(discarded, join(cwd, input));
+  }
+  return { schemaVersion: 1, files };
+}
+
+/**
+ * Stream file contents into the rolling hash so huge inputs never load fully
+ * into memory, and capture the file's own digest from the same pass.
+ */
+async function hashFileInto(hash: Hash, path: string): Promise<string> {
+  const fileHash = createHash("sha256");
   try {
     for await (const chunk of createReadStream(path)) {
       hash.update(chunk as Buffer);
+      fileHash.update(chunk as Buffer);
     }
   } catch {
     hash.update("[missing]");
+    return "[missing]";
   }
+  return `sha256:${fileHash.digest("hex")}`;
 }
 
 export async function computeCandidateContext(pipeline: NormalizedPipeline, cwd: string): Promise<CandidateContext> {

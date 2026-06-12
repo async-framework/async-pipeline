@@ -8,7 +8,7 @@ import { runDoctor } from "./doctor.js";
 import { checkGitHubWorkflow, jobsForGitHubEvent, readGitHubEventContext, renderGitHubWorkflow, writeGitHubWorkflow } from "./github.js";
 import { loadPipeline } from "./loader.js";
 import { beginShutdown, commandProxy, planJob, runJob, runSingleTask, shutdownExitCode, type CommandResult, type PipelineCommands } from "./runner.js";
-import { createStore, pruneCacheEntries } from "./store.js";
+import { computeTaskInputManifest, createStore, diffInputManifests, pruneCacheEntries, readCacheInputManifest, readContextPacks, readTaskBaseline } from "./store.js";
 import { matrixForJob, readPipelineMetadata, resolveSources, sourceContext } from "./sources.js";
 import { checkTaskSync, describeTaskSync, renderTaskSync, writeTaskSync } from "./sync.js";
 
@@ -248,12 +248,76 @@ async function dispatchCommand(commandName: string, args: string[], context: Pip
   }
 
   if (commandName === "explain") {
-    const taskId = args[0];
-    if (!taskId) throw new Error(`Usage: ${program} explain <task>`);
     const store = virtualStore(context.cwd);
+    const formatIndex = args.indexOf("--format");
+    const explainFormat = formatIndex >= 0 ? args[formatIndex + 1] : "text";
+    if (explainFormat !== "text" && explainFormat !== "json") throw new Error(`Unsupported explain format "${explainFormat}".`);
+
+    const runIndex = args.indexOf("--run");
+    if (runIndex >= 0) {
+      const runId = args[runIndex + 1];
+      if (!runId || runId.startsWith("--")) throw new Error(`Usage: ${program} explain --run <run-id> [--format json]`);
+      const packs = await readContextPacks(store, runId);
+      if (explainFormat === "json") {
+        context.stdout(`${JSON.stringify(packs, null, 2)}\n`);
+        return 0;
+      }
+      if (packs.length === 0) {
+        context.stdout(`No context packs recorded for run ${runId}.\n`);
+        return 0;
+      }
+      for (const pack of packs) {
+        context.stdout(`Task ${pack.task} failed after ${pack.attempts} attempt${pack.attempts === 1 ? "" : "s"}: ${pack.error}\n`);
+        if ("baselineMissing" in pack.inputDiff) {
+          context.stdout("  inputs: no passing baseline recorded\n");
+        } else {
+          const diff = pack.inputDiff;
+          context.stdout(`  inputs vs last pass: ${diff.changed.length} changed, ${diff.added.length} added, ${diff.removed.length} removed\n`);
+          for (const path of diff.changed) context.stdout(`    ~ ${path}\n`);
+          for (const path of diff.added) context.stdout(`    + ${path}\n`);
+          for (const path of diff.removed) context.stdout(`    - ${path}\n`);
+        }
+        if (pack.claims?.length) context.stdout(`  claims touched: ${pack.claims.join(", ")}\n`);
+        context.stdout(`  reproduce: ${pack.reproduce}\n`);
+      }
+      return 0;
+    }
+
+    const taskId = args[0];
+    if (!taskId || taskId.startsWith("--")) throw new Error(`Usage: ${program} explain <task> [--diff-inputs] | explain --run <run-id>`);
     const explainPipeline = await loadAvailableSourceGraph(context.pipeline, context.cwd, store);
     const task = explainPipeline.tasks[taskId];
     if (!task) throw new Error(`Unknown task "${taskId}".`);
+
+    if (args.includes("--diff-inputs")) {
+      const baseline = await readTaskBaseline(store, taskId);
+      const baselineManifest = baseline ? await readCacheInputManifest(store, baseline.cacheKey) : null;
+      const current = await computeTaskInputManifest(explainPipeline, task, context.cwd);
+      if (!baseline || !baselineManifest) {
+        if (explainFormat === "json") {
+          context.stdout(`${JSON.stringify({ task: taskId, baselineMissing: true, current }, null, 2)}\n`);
+        } else {
+          context.stdout(`No passing baseline recorded for task "${taskId}" (${Object.keys(current.files).length} current input file(s)). Run the task to record one.\n`);
+        }
+        return 0;
+      }
+      const diff = diffInputManifests(baselineManifest, current);
+      if (explainFormat === "json") {
+        context.stdout(`${JSON.stringify({ task: taskId, baselineCacheKey: baseline.cacheKey, baselineRecordedAt: baseline.recordedAt, ...diff }, null, 2)}\n`);
+        return 0;
+      }
+      const total = diff.changed.length + diff.added.length + diff.removed.length;
+      context.stdout(`Inputs for "${taskId}" vs last passing entry (recorded ${baseline.recordedAt}):\n`);
+      if (total === 0) {
+        context.stdout("  unchanged\n");
+        return 0;
+      }
+      for (const path of diff.changed) context.stdout(`  ~ ${path}\n`);
+      for (const path of diff.added) context.stdout(`  + ${path}\n`);
+      for (const path of diff.removed) context.stdout(`  - ${path}\n`);
+      return 0;
+    }
+
     context.stdout(`${JSON.stringify(task, jsonReplacer, 2)}\n`);
     return 0;
   }
@@ -478,7 +542,8 @@ function printHelp(program: string): string {
   ${program} run-task <task> [--sandbox <id>] [--concurrency <n>] [--force] [--dry-run] [--format text|json]
   ${program} list
   ${program} graph --format json|dot
-  ${program} explain <task>
+  ${program} explain <task> [--diff-inputs] [--format text|json]
+  ${program} explain --run <run-id> [--format text|json]
   ${program} sources list
   ${program} sources sync
   ${program} metadata --format json [--include-sources]

@@ -689,6 +689,23 @@ Selection per environment: both `use` and `model` accept `env.var(...)`, resolve
 
 Recommended shape: give agent tasks declared `outputs` and a deterministic dependent verifier task, and keep live agent profiles out of CI-triggered job targets — commit the verified artifact and let CI run the verifier subtree (or select a `mock` profile via repository variables).
 
+## failure context packs
+
+On task failure the runner writes a context pack to `.async/runs/<run-id>/context/<task>.json`: the error, a redacted log tail, the reproduction command, and the input diff against the task's last passing cache entry — content digests only, never file contents. The design is recorded in [ADR-0003](adr/0003-failure-context-packs.md). Packs are bounded for small-context consumption (the log tail is capped at 4 KiB) and flow through the same secret redaction as task logs.
+
+The diff baseline comes from two pieces of persisted state: every cache entry persists a per-file digest manifest (`inputs.json`) for the input state that produced it, and a per-task baseline pointer (`.async/cache/baselines/<task>.json`) tracks the most recent passing entry. A task that has never passed reports `baselineMissing` instead of a diff. When the project keeps a claims registry (`tests/claims.json`), packs also name the claim ids whose registered test titles appear in the failing log. `gc` prunes baseline pointers whose cache entries were removed.
+
+Inspect packs and diffs from the CLI:
+
+```sh
+async-pipeline explain --run <run-id>             # human summary of a run's packs
+async-pipeline explain --run <run-id> --format json
+async-pipeline explain <task> --diff-inputs       # what changed since the task last passed
+async-pipeline explain <task> --diff-inputs --format json
+```
+
+`explain <task> --diff-inputs` reports the files that changed since the task last passed, computed from content digests without resolving steps or evaluating deferred callbacks.
+
 ## command policy
 
 `commands` governs CLI/tool/agent command boundaries. It is separate from task shell execution, which still uses the run's command executor.

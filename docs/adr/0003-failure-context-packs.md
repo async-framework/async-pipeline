@@ -1,11 +1,11 @@
 # ADR-0003: Failure Context Packs and Per-File Input Digests
 
-**Status:** Proposed
+**Status:** Accepted (v1 subset shipped in 0.2.3)
 **Date:** 2026-06-12
 **Deciders:** PatrickJS
 **Index:** [Design decisions](index.md)
 
-> Proposed design. Nothing here is a shipped behavior claim; claims and tests land with the implementation per [AGENTS.md](../../AGENTS.md).
+> Shipped in 0.2.3 per Option A: per-file digest manifests (`inputs.json`) persisted with every cache entry, per-task last-passing baseline pointers (pruned by `gc` when their entries go), failure context packs under `.async/runs/<run-id>/context/` (redacted 4 KiB log tail, repro command, digest-only input diff, `baselineMissing` when no pass is recorded), and `explain <task> --diff-inputs` / `explain --run <run-id>` — see [api.md](../api.md#failure-context-packs) for the reference and registered claims. The claims cross-reference shipped with a narrower heuristic than decision 2 described: packs name claims whose registered test titles appear in the failing log, rather than mapping test files to tasks. Not yet shipped: packs for downgraded cache hits (consequences "revisit" list).
 
 ## Context
 

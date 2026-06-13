@@ -20,6 +20,7 @@ console.log(`Publishing ${spec}...`);
 const publish = spawnSync("npm", [
   "publish",
   "--access", "public",
+  "--tag", "backfill",
   "--registry", "https://registry.npmjs.org/"
 ], { cwd: packageDir, stdio: "inherit" });
 process.exit(publish.status ?? 1);

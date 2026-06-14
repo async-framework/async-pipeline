@@ -5,8 +5,7 @@ Use this guide to try the repo, add a pipeline to another project, inspect local
 ## Requirements
 
 - pnpm
-- Node 24 for `pipeline.ts`
-- Node 20+ for `pipeline.mjs` or `pipeline.js`
+- Node 24
 - Optional: Lima as `limactl` for programmatic isolated-runner experiments
 
 ## 1. Try This Repo
@@ -223,7 +222,7 @@ Triggers describe when jobs should run. Sync describes which generated files sho
 
 Commit:
 
-- `pipeline.ts`, `pipeline.mjs`, or `pipeline.js`
+- `pipeline.ts`, `pipeline.js`, `pipeline.mjs`, or `pipeline.mts`
 - `.github/workflows/async-pipeline.yml`
 - `.github/async-pipeline.lock.json`
 - `.async-pipeline/tasks.lock.json` when `sync.tasks` is configured
@@ -243,11 +242,12 @@ If the CLI cannot find a config file, make sure one of these exists at the proje
 
 ```txt
 pipeline.ts
-pipeline.mjs
 pipeline.js
+pipeline.mjs
+pipeline.mts
 ```
 
-If `pipeline.ts` fails to load on Node 20, use Node 24 or convert the config to `pipeline.mjs`.
+If `pipeline.ts` or `pipeline.mts` fails to load, use Node 24 or convert the config to `pipeline.js` or `pipeline.mjs`.
 
 If a task keeps returning a cache hit, check its `inputs`. A task only becomes dirty when its task config or declared input files change.
 

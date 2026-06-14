@@ -4,8 +4,10 @@ import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import {
+  DEFAULT_PIPELINE_CONFIG_FILES,
   composePipelines,
   parseTaskRef,
+  sourceUsesDefaultPipelineConfig,
   tasksForJob,
   type CandidateContext,
   type ExecutionSourceRecord,
@@ -94,7 +96,10 @@ export async function resolveSources(
     const dir = sourceDefinition.type === "git"
       ? await resolveGitSource(sourceDefinition, store, options.sync ? "sync" : options.ensure ? "ensure" : "skip")
       : resolve(cwd, sourceDefinition.path);
-    const pipelinePath = join(dir, sourceDefinition.pipeline);
+    const pipelineFile = sourceUsesDefaultPipelineConfig(sourceDefinition)
+      ? findPipelineConfigFile(dir) ?? sourceDefinition.pipeline
+      : sourceDefinition.pipeline;
+    const pipelinePath = join(dir, pipelineFile);
     const commit = existsSync(dir) ? await gitOutput(["rev-parse", "HEAD"], dir).catch(() => undefined) : undefined;
     const dirty = existsSync(dir) ? (await gitOutput(["status", "--porcelain"], dir).catch(() => "")).trim().length > 0 : undefined;
 
@@ -102,7 +107,7 @@ export async function resolveSources(
       id: sourceDefinition.id,
       type: sourceDefinition.type,
       dir,
-      pipeline: sourceDefinition.pipeline,
+      pipeline: pipelineFile,
       url: sourceDefinition.type === "git" ? sourceDefinition.url : undefined,
       path: sourceDefinition.type === "path" ? sourceDefinition.path : undefined,
       ref: sourceDefinition.type === "git" ? sourceDefinition.ref : undefined,
@@ -121,6 +126,13 @@ export async function resolveSources(
     };
   }
   return resolved;
+}
+
+function findPipelineConfigFile(dir: string): string | undefined {
+  for (const fileName of DEFAULT_PIPELINE_CONFIG_FILES) {
+    if (existsSync(join(dir, fileName))) return fileName;
+  }
+  return undefined;
 }
 
 export async function readPipelineMetadata(

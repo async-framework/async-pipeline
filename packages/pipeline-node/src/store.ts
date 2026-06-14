@@ -3,7 +3,7 @@ import { createReadStream } from "node:fs";
 import { copyFile, mkdir, open, readdir, readFile, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import type { CandidateContext, EnvVarRef, ExecutionRecord, NormalizedPipeline, NormalizedTask, TaskCacheOptions, TaskResult, TaskSourceContext, TaskStep } from "@async/pipeline-core";
-import { expandInputs } from "@async/pipeline-core";
+import { DEFAULT_PIPELINE_CONFIG_FILES, expandInputs } from "@async/pipeline-core";
 
 export interface PipelineStore {
   root: string;
@@ -461,7 +461,7 @@ async function hashFileInto(hash: Hash, path: string): Promise<string> {
 
 export async function computeCandidateContext(pipeline: NormalizedPipeline, cwd: string): Promise<CandidateContext> {
   const hash = createHash("sha256");
-  const inputs = new Set<string>(["pipeline.ts", "pipeline.mjs", "pipeline.js"]);
+  const inputs = new Set<string>(DEFAULT_PIPELINE_CONFIG_FILES);
   for (const taskDefinition of Object.values(pipeline.tasks)) {
     for (const input of expandInputs(pipeline, taskDefinition.inputs)) {
       inputs.add(input);

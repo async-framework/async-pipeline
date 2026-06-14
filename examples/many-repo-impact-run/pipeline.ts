@@ -41,7 +41,6 @@ export default definePipeline({
 
     admin: source.path({
       path: "repos/admin",
-      pipeline: "pipeline.ts",
       writable: true,
       prepare: [
         sh((ctx) => sh`node tools/use-candidate.mjs ${ctx.candidate.dir}`)

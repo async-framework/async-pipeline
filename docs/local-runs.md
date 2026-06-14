@@ -234,8 +234,9 @@ The CLI searches the project root in this order:
 
 ```txt
 pipeline.ts
-pipeline.mjs
 pipeline.js
+pipeline.mjs
+pipeline.mts
 ```
 
-Use `pipeline.ts` on Node 24. Use `pipeline.mjs` or `pipeline.js` for Node 20+.
+Use `pipeline.ts` or `pipeline.mts` on Node 24. Use `pipeline.js` or `pipeline.mjs` when you want a plain JavaScript config.

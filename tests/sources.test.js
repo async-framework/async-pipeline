@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { test } from "node:test";
-import { loadPipeline, runJob } from "../packages/pipeline-node/dist/index.js";
+import { loadPipeline, readPipelineMetadata, runJob } from "../packages/pipeline-node/dist/index.js";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 const packageUrl = pathToFileURL(join(repoRoot, "packages/pipeline/dist/index.js")).href;
@@ -29,6 +29,60 @@ test("runs a path source task with root-owned dynamic prepare and cache reuse", 
     assert.equal(second.tasks.find((task) => task.id === "app:test")?.status, "cached");
   } finally {
     await rm(fixture.parent, { force: true, recursive: true });
+  }
+});
+
+test("discovers omitted source pipeline in ts, js, mjs, mts order", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "async-pipeline-source-config-order-"));
+  const root = join(parent, "root");
+  const app = join(parent, "app");
+  try {
+    await mkdir(root, { recursive: true });
+    await mkdir(app, { recursive: true });
+    await writeFile(join(root, "package.json"), JSON.stringify({ type: "module" }), "utf8");
+    await writeFile(join(app, "package.json"), JSON.stringify({ type: "module" }), "utf8");
+    await writeFile(join(root, "pipeline.js"), `
+import { definePipeline, job, sh, source, task } from ${JSON.stringify(packageUrl)};
+
+export default definePipeline({
+  name: "root",
+  sources: { app: source.path({ path: "../app" }) },
+  tasks: { impact: task({ dependsOn: ["app:verify"], run: sh\`true\` }) },
+  jobs: { verifyImpact: job({ target: "impact" }) }
+});
+`, "utf8");
+
+    for (const [fileName, name] of [
+      ["pipeline.ts", "ts"],
+      ["pipeline.js", "js"],
+      ["pipeline.mjs", "mjs"],
+      ["pipeline.mts", "mts"]
+    ]) {
+      await writeFile(join(app, fileName), `
+import { definePipeline, job, sh, task } from ${JSON.stringify(packageUrl)};
+
+export default definePipeline({
+  name: ${JSON.stringify(name)},
+  tasks: { verify: task({ cache: false, run: sh\`true\` }) },
+  jobs: { verify: job({ target: "verify" }) }
+});
+`, "utf8");
+    }
+
+    const readSourcePipeline = async () => {
+      const metadata = await readPipelineMetadata(join(root, "pipeline.js"), { cwd: root, includeSources: true });
+      return metadata.sourceMetadata.app.record.pipeline;
+    };
+
+    assert.equal(await readSourcePipeline(), "pipeline.ts");
+    await unlink(join(app, "pipeline.ts"));
+    assert.equal(await readSourcePipeline(), "pipeline.js");
+    await unlink(join(app, "pipeline.js"));
+    assert.equal(await readSourcePipeline(), "pipeline.mjs");
+    await unlink(join(app, "pipeline.mjs"));
+    assert.equal(await readSourcePipeline(), "pipeline.mts");
+  } finally {
+    await rm(parent, { force: true, recursive: true });
   }
 });
 

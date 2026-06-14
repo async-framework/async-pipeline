@@ -39,6 +39,10 @@ export type EnvValue = string | EnvSecretRef | EnvVarRef;
 export type SandboxKind = "host" | "lima" | "docker" | "container";
 export type ContainerProvider = "auto" | "docker" | "apple-container" | "lima";
 
+export const DEFAULT_PIPELINE_CONFIG_FILES = ["pipeline.ts", "pipeline.js", "pipeline.mjs", "pipeline.mts"] as const;
+
+const SOURCE_PIPELINE_DEFAULTED = Symbol.for("@async/pipeline.source.pipeline.defaulted");
+
 export interface ShellCommand {
   kind: "shell";
   command: string;
@@ -1472,21 +1476,32 @@ function collectRequiredTasks(pipeline: NormalizedPipeline, targets: TaskId[]): 
 
 function normalizeSource(id: SourceId, sourceDefinition: SourceDefinition): NormalizedSource {
   const prepare = [...(sourceDefinition.prepare ?? [])];
-  const pipeline = sourceDefinition.pipeline ?? "pipeline.ts";
-  if (sourceDefinition.type === "git") {
-    return {
-      ...sourceDefinition,
-      id,
-      pipeline,
-      prepare
-    };
+  const pipeline = sourceDefinition.pipeline ?? DEFAULT_PIPELINE_CONFIG_FILES[0];
+  const defaulted = !sourceDefinition.pipeline;
+  const normalized = sourceDefinition.type === "git"
+    ? {
+        ...sourceDefinition,
+        id,
+        pipeline,
+        prepare
+      }
+    : {
+        ...sourceDefinition,
+        id,
+        pipeline,
+        prepare
+      };
+  if (defaulted) {
+    Object.defineProperty(normalized, SOURCE_PIPELINE_DEFAULTED, {
+      value: true,
+      enumerable: false
+    });
   }
-  return {
-    ...sourceDefinition,
-    id,
-    pipeline,
-    prepare
-  };
+  return normalized;
+}
+
+export function sourceUsesDefaultPipelineConfig(sourceDefinition: NormalizedSource): boolean {
+  return (sourceDefinition as NormalizedSource & { [SOURCE_PIPELINE_DEFAULTED]?: true })[SOURCE_PIPELINE_DEFAULTED] === true;
 }
 
 function validateComposedPipeline(pipeline: NormalizedPipeline, loadedSources: Set<SourceId>): void {

@@ -3,7 +3,7 @@ import { existsSync, realpathSync } from "node:fs";
 import { readFile, readdir, rm } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { buildGraph, composePipelines, tasksForJob, type ContainerProvider, type NormalizedPipeline } from "@async/pipeline-core";
+import { DEFAULT_PIPELINE_CONFIG_FILES, buildGraph, composePipelines, tasksForJob, type ContainerProvider, type NormalizedPipeline } from "@async/pipeline-core";
 import { runDoctor } from "./doctor.js";
 import { checkGitHubWorkflow, jobsForGitHubEvent, readGitHubEventContext, renderGitHubWorkflow, writeGitHubWorkflow } from "./github.js";
 import { loadPipeline } from "./loader.js";
@@ -121,7 +121,7 @@ async function runPipelineCliBuffered(options: Omit<PipelineCliOptions, "stdout"
     }
 
     if (!configPath) {
-      throw new Error(`No pipeline.ts, pipeline.mjs, or pipeline.js found in ${cwd}.`);
+      throw new Error(`No ${formatPipelineConfigList()} found in ${cwd}.`);
     }
 
     const pipeline = await loadPipeline(configPath);
@@ -781,7 +781,7 @@ function isContainerProvider(value: string): value is ContainerProvider {
 function findPipelineConfig(cwd: string): string | null {
   let current = resolve(cwd);
   for (;;) {
-    for (const fileName of ["pipeline.ts", "pipeline.mjs", "pipeline.js"]) {
+    for (const fileName of DEFAULT_PIPELINE_CONFIG_FILES) {
       const configPath = join(current, fileName);
       if (existsSync(configPath)) return configPath;
     }
@@ -789,6 +789,10 @@ function findPipelineConfig(cwd: string): string | null {
     if (parent === current) return null;
     current = parent;
   }
+}
+
+function formatPipelineConfigList(): string {
+  return `${DEFAULT_PIPELINE_CONFIG_FILES.slice(0, -1).join(", ")}, or ${DEFAULT_PIPELINE_CONFIG_FILES[DEFAULT_PIPELINE_CONFIG_FILES.length - 1]}`;
 }
 
 function programName(): string {

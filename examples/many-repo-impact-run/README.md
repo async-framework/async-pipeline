@@ -5,7 +5,7 @@ A "design system" repo that proves a candidate change against two explicitly dec
 ```ts
 sources: {
   storefront: source.path({ path: "repos/storefront", pipeline: "pipeline.mjs", writable: true, prepare: [...] }),
-  admin: source.path({ path: "repos/admin", pipeline: "pipeline.ts", writable: true, prepare: [...] })
+  admin: source.path({ path: "repos/admin", writable: true, prepare: [...] })
 },
 tasks: {
   impact: task({
@@ -14,7 +14,7 @@ tasks: {
 }
 ```
 
-The dependent repos are committed under `repos/` so the example runs anywhere, offline, with no cloning. They stand in for real repos you own; the commented `source.git(...)` block in [pipeline.ts](pipeline.ts) shows the production shape (pin `ref` to a SHA for reproducible runs).
+The dependent repos are committed under `repos/` so the example runs anywhere, offline, with no cloning. They stand in for real repos you own; the commented `source.git(...)` block in [pipeline.ts](pipeline.ts) shows the production shape (pin `ref` to a SHA for reproducible runs). The admin source uses default config discovery; storefront keeps `pipeline.mjs` explicit so it cannot be shadowed by a future `pipeline.ts` or `pipeline.js`.
 
 ## How The Candidate Reaches The Dependents
 

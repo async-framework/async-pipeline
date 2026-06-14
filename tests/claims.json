@@ -78,9 +78,18 @@
     {
       "id": "readme.config-walk-up",
       "source": "README.md",
-      "anchor": "The CLI finds `pipeline.ts` from any subdirectory by walking up.",
+      "anchor": "The CLI finds `pipeline.ts`, `pipeline.js`, `pipeline.mjs`, or `pipeline.mts` from any subdirectory by walking up.",
       "tests": [
+        "discovers pipeline config in ts, js, mjs, mts order",
         "run auto-prunes records, emits json, and finds config from subdirectories"
+      ]
+    },
+    {
+      "id": "local-runs.config-discovery-order",
+      "source": "docs/local-runs.md",
+      "anchor": "The CLI searches the project root in this order:",
+      "tests": [
+        "discovers pipeline config in ts, js, mjs, mts order"
       ]
     },
     {
@@ -207,6 +216,22 @@
       "anchor": "`prepare` runs inside that source checkout before source tasks run.",
       "tests": [
         "runs a path source task with root-owned dynamic prepare and cache reuse"
+      ]
+    },
+    {
+      "id": "api.source-default-discovery",
+      "source": "docs/api.md",
+      "anchor": "When `pipeline` is omitted, the source checkout is searched in this order: `pipeline.ts`, `pipeline.js`, `pipeline.mjs`, `pipeline.mts`.",
+      "tests": [
+        "discovers omitted source pipeline in ts, js, mjs, mts order"
+      ]
+    },
+    {
+      "id": "many-repo.source-default-discovery",
+      "source": "docs/many-repo-impact-runs.md",
+      "anchor": "When `pipeline` is omitted, source checkouts use the same config discovery order as the root CLI: `pipeline.ts`, `pipeline.js`, `pipeline.mjs`, `pipeline.mts`.",
+      "tests": [
+        "discovers omitted source pipeline in ts, js, mjs, mts order"
       ]
     },
     {
@@ -797,6 +822,22 @@
       "anchor": "mock adapter profile emitting an applicable unified diff with one line of context per hunk, full circle exercised by the examples suite",
       "tests": [
         "agent-claims-repair: verify is green, the stale fixture fails, and the mock agent proposes an applicable patch"
+      ]
+    },
+    {
+      "id": "changelog.config-discovery-order",
+      "source": "CHANGELOG.md",
+      "anchor": "Change default pipeline config discovery order to `pipeline.ts`, `pipeline.js`, `pipeline.mjs`, `pipeline.mts`.",
+      "tests": [
+        "discovers pipeline config in ts, js, mjs, mts order"
+      ]
+    },
+    {
+      "id": "changelog.source-default-discovery",
+      "source": "CHANGELOG.md",
+      "anchor": "Source declarations that omit `pipeline` now use the same default discovery order as the root CLI.",
+      "tests": [
+        "discovers omitted source pipeline in ts, js, mjs, mts order"
       ]
     }
   ]

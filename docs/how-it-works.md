@@ -14,8 +14,9 @@ The CLI loads one config file from the project root:
 
 ```txt
 pipeline.ts
-pipeline.mjs
 pipeline.js
+pipeline.mjs
+pipeline.mts
 ```
 
 The config default-exports `definePipeline(...)`:
@@ -154,7 +155,6 @@ export default definePipeline({
     storefront: source.git({
       url: "https://github.com/acme/storefront.git",
       ref: "main",
-      pipeline: "pipeline.ts",
       prepare: [
         sh`pnpm install --frozen-lockfile`,
         sh((ctx) => sh`pnpm add @acme/design-system@file:${ctx.candidate.dir}`)

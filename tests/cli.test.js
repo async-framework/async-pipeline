@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -19,6 +19,50 @@ test("pipeline list shows self job and tasks", () => {
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /verify/);
   assert.match(result.stdout, /typecheck/);
+});
+
+test("discovers pipeline config in ts, js, mjs, mts order", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "async-pipeline-cli-config-order-"));
+  try {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ type: "module" }), "utf8");
+    for (const [fileName, name] of [
+      ["pipeline.ts", "ts"],
+      ["pipeline.js", "js"],
+      ["pipeline.mjs", "mjs"],
+      ["pipeline.mts", "mts"]
+    ]) {
+      writeFileSync(join(dir, fileName), `
+import { definePipeline, job, sh, task } from ${JSON.stringify(packageUrl)};
+
+export default definePipeline({
+  name: ${JSON.stringify(name)},
+  tasks: { verify: task({ cache: false, run: sh\`true\` }) },
+  jobs: { verify: job({ target: "verify" }) }
+});
+`, "utf8");
+    }
+
+    const readName = async () => {
+      const result = await runPipelineCli({
+        args: ["metadata", "--format", "json"],
+        cwd: dir,
+        stdout() {},
+        stderr() {}
+      });
+      assert.equal(result.code, 0, result.stderr);
+      return JSON.parse(result.stdout).name;
+    };
+
+    assert.equal(await readName(), "ts");
+    unlinkSync(join(dir, "pipeline.ts"));
+    assert.equal(await readName(), "js");
+    unlinkSync(join(dir, "pipeline.js"));
+    assert.equal(await readName(), "mjs");
+    unlinkSync(join(dir, "pipeline.mjs"));
+    assert.equal(await readName(), "mts");
+  } finally {
+    rmSync(dir, { force: true, recursive: true });
+  }
 });
 
 // Regression: the published bin (packages/pipeline/dist/cli.js) is a wrapper

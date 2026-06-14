@@ -285,7 +285,6 @@ Cache keys include direct dependency cache fingerprints, so changing a dependenc
 ```ts
 source.path({
   path: "../admin",
-  pipeline: "pipeline.ts",
   writable: true,
   prepare: [sh`pnpm install --frozen-lockfile`]
 });
@@ -293,13 +292,14 @@ source.path({
 source.git({
   url: "https://github.com/acme/storefront.git",
   ref: "main",
-  pipeline: "pipeline.ts",
   prepare: [
     sh`pnpm install --frozen-lockfile`,
     sh((ctx) => sh`pnpm add @acme/design-system@file:${ctx.candidate.dir}`)
   ]
 });
 ```
+
+When `pipeline` is omitted, the source checkout is searched in this order: `pipeline.ts`, `pipeline.js`, `pipeline.mjs`, `pipeline.mts`. Set `pipeline` explicitly when the repo uses a non-default filename or when multiple default names exist and you want one specific file.
 
 Sources are explicit. `@async/pipeline` does not infer reverse dependencies from package manifests, lockfiles, npm metadata, or GitHub search.
 

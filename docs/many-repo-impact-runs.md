@@ -15,7 +15,6 @@ export default definePipeline({
     storefront: source.git({
       url: "https://github.com/acme/storefront.git",
       ref: "main",
-      pipeline: "pipeline.ts",
       prepare: [
         sh`pnpm install --frozen-lockfile`,
         sh((ctx) => sh`pnpm add @acme/design-system@file:${ctx.candidate.dir}`)
@@ -23,7 +22,6 @@ export default definePipeline({
     }),
     admin: source.path({
       path: "../admin",
-      pipeline: "pipeline.ts",
       writable: true,
       prepare: [sh`pnpm install --frozen-lockfile`]
     })
@@ -45,6 +43,7 @@ How it works:
 - Git sources are cloned into `.async/sources/<source-id>/<hash>` when you run `async-pipeline sources sync`, `async-pipeline run <job>`, or `async-pipeline run-task <source>:<task>`.
 - The hash is derived from the source URL and ref, so repeated runs reuse the same warm checkout.
 - `source.path(...)` points at a local checkout you own. Use it when you want a specific directory such as `../admin`.
+- When `pipeline` is omitted, source checkouts use the same config discovery order as the root CLI: `pipeline.ts`, `pipeline.js`, `pipeline.mjs`, `pipeline.mts`.
 - `prepare` runs inside the source checkout before source tasks run.
 - `ctx.candidate.dir` points back to the root repo being tested, which lets the source checkout install or link the candidate change.
 

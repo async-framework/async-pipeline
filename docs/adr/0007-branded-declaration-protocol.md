@@ -1,6 +1,6 @@
 # ADR-0007: Branded Declaration Protocol
 
-**Status:** Accepted (v1 in 0.2.5)
+**Status:** Accepted (v1 in 0.3.0)
 **Date:** 2026-06-13
 **Deciders:** PatrickJS
 **Index:** [Design decisions](index.md)

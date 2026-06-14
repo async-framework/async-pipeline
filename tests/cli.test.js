@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -157,6 +157,72 @@ export default definePipeline({
     assert.match(stderr, /Task boom failed: .*exit code 7/);
   } finally {
     rmSync(dir, { force: true, recursive: true });
+  }
+});
+
+test("run-task dry-run accepts local and source task group ids", async () => {
+  const parent = mkdtempSync(join(tmpdir(), "async-pipeline-cli-groups-"));
+  const root = join(parent, "root");
+  const app = join(parent, "app");
+  try {
+    writeFileSync(join(parent, "package.json"), JSON.stringify({ type: "module" }), "utf8");
+    mkdirSync(root, { recursive: true });
+    mkdirSync(app, { recursive: true });
+    writeFileSync(join(root, "pipeline.js"), `
+import { definePipeline, job, sh, source, task } from ${JSON.stringify(packageUrl)};
+
+export default definePipeline({
+  name: "root",
+  sources: {
+    app: source.path({ path: "../app", pipeline: "pipeline.js" })
+  },
+  tasks: {
+    claims: {
+      index: task({ cache: false, run: sh\`echo claims\` }),
+      report: task({ cache: false, run: sh\`echo report\` })
+    }
+  },
+  jobs: {
+    verify: job({ target: "claims" })
+  }
+});
+`, "utf8");
+    writeFileSync(join(app, "pipeline.js"), `
+import { definePipeline, job, sh, task } from ${JSON.stringify(packageUrl)};
+
+export default definePipeline({
+  name: "app",
+  tasks: {
+    claims: {
+      index: task({ cache: false, run: sh\`echo app claims\` }),
+      report: task({ cache: false, run: sh\`echo app report\` })
+    }
+  },
+  jobs: {
+    verify: job({ target: "claims.report" })
+  }
+});
+`, "utf8");
+
+    for (const taskId of ["claims", "claims.report", "app:claims.report"]) {
+      let stdout = "";
+      let stderr = "";
+      const result = await runPipelineCli({
+        args: ["run-task", taskId, "--dry-run"],
+        ...({ cwd: root }),
+        stdout(text) {
+          stdout += text;
+        },
+        stderr(text) {
+          stderr += text;
+        }
+      });
+
+      assert.equal(result.code, 0, stderr);
+      assert.match(stdout, new RegExp(taskId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    }
+  } finally {
+    rmSync(parent, { force: true, recursive: true });
   }
 });
 

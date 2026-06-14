@@ -1,3 +1,4 @@
+import { brandDeclaration, hasDeclarationKind } from "./declaration.js";
 import { pipelineError } from "./errors.js";
 
 export type CachePolicy = "local" | "session";
@@ -42,19 +43,19 @@ export interface ParsedCacheRef {
 const knownPolicies = new Set<CachePolicy>(["local", "session"]);
 
 export function memoryCache(): CacheStoreDefinition {
-  return { kind: "cache-store", type: "memory" };
+  return brandDeclaration({ kind: "cache-store", type: "memory" }, "cache.store.memory");
 }
 
 export function fileCache(options: { root?: string } = {}): CacheStoreDefinition {
-  return { kind: "cache-store", type: "file", root: options.root };
+  return brandDeclaration({ kind: "cache-store", type: "file", root: options.root }, "cache.store.file");
 }
 
 export function customCache(config: Record<string, unknown> = {}): CacheStoreDefinition {
-  return { kind: "cache-store", type: "custom", config };
+  return brandDeclaration({ kind: "cache-store", type: "custom", config }, "cache.store.custom");
 }
 
 export function redisCache(config: Record<string, unknown> = {}): CacheStoreDefinition {
-  return { kind: "cache-store", type: "custom", config: { ...config, adapter: "redis" } };
+  return brandDeclaration({ kind: "cache-store", type: "custom", config: { ...config, adapter: "redis" } }, "cache.store.redis");
 }
 
 export function defineCache(input: CacheRegistryInput | Record<string, CacheStoreDefinition> = {}): CacheRegistryDefinition {
@@ -100,7 +101,7 @@ export function parseCacheRef(ref: CacheRef): ParsedCacheRef {
 export function isCacheDirective(value: unknown): value is CacheDirective {
   return Boolean(value)
     && typeof value === "object"
-    && (value as { kind?: unknown }).kind === "async-pipeline.directive.cache";
+    && ((value as { kind?: unknown }).kind === "async-pipeline.directive.cache" || hasDeclarationKind(value, "directive.cache"));
 }
 
 export function assertCacheStore(registry: CacheRegistryDefinition, ref: ParsedCacheRef): void {
@@ -122,18 +123,18 @@ export function mergeWithDefaultCacheStores(registry: CacheRegistryDefinition): 
 }
 
 function makeCacheRegistry(defaultRef: CacheRef, stores: Record<string, CacheStoreDefinition>): CacheRegistryDefinition {
-  return {
+  return brandDeclaration({
     kind: "cache-registry",
     default: defaultRef,
     stores,
     use(ref: CacheRef = defaultRef, options?: CacheUseOptions): CacheDirective {
-      return {
+      return brandDeclaration({
         kind: "async-pipeline.directive.cache",
         ref,
         options
-      };
+      }, "directive.cache");
     }
-  };
+  }, "cache.registry");
 }
 
 export function defaultCachePolicyForStore(store: string): CachePolicy {

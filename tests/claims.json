@@ -218,11 +218,102 @@
       ]
     },
     {
+      "id": "readme.task-group-flattening",
+      "source": "README.md",
+      "anchor": "Nested task groups flatten with `.`: `claims.index` runs as `claims`, and `claims.report` runs as `claims.report`.",
+      "tests": [
+        "task groups flatten index paths and resolve group-local dependencies",
+        "run-task dry-run accepts local and source task group ids"
+      ]
+    },
+    {
+      "id": "readme.task-group-source-namespace",
+      "source": "README.md",
+      "anchor": "Source namespaces still use `:`, so `storefront:claims.report` means task `claims.report` from source `storefront`.",
+      "tests": [
+        "task groups keep source namespace parsing unchanged",
+        "run-task dry-run accepts local and source task group ids"
+      ]
+    },
+    {
+      "id": "readme.sync-flattened-task-id",
+      "source": "README.md",
+      "anchor": "\"pipeline:task:claims.report\": \"async-pipeline run-task claims.report\"",
+      "tests": [
+        "renders opt-in raw task scripts for flattened task group ids"
+      ]
+    },
+    {
       "id": "api.unknown-fields-rejected",
       "source": "docs/api.md",
       "anchor": "Unknown fields in the pipeline, tasks, taskDefaults, jobs, or a job's `github` config are rejected with `ASYNC_PIPELINE_UNKNOWN_FIELD`",
       "tests": [
         "rejects unknown config fields with the field name"
+      ]
+    },
+    {
+      "id": "api.declaration-metadata",
+      "source": "docs/api.md",
+      "anchor": "Declaration helpers attach non-enumerable metadata under `Symbol.for(\"@async/pipeline.declaration\")`, so JSON output and enumerable config shape stay unchanged.",
+      "tests": [
+        "declaration factories expose non-enumerable metadata without changing JSON output"
+      ]
+    },
+    {
+      "id": "api.declaration-validation",
+      "source": "docs/api.md",
+      "anchor": "The declaration brand is a discriminator, not trust: branded task, shell, and agent nodes are still validated, and unknown fields are still rejected.",
+      "tests": [
+        "portable branded task and shell nodes normalize through validation"
+      ]
+    },
+    {
+      "id": "api.section-factories",
+      "source": "docs/api.md",
+      "anchor": "Optional section factories such as `tasks({ ... })`, `jobs({ ... })`, and `sources({ ... })` are accepted without double wrapping; plain top-level section objects remain the default authoring style.",
+      "tests": [
+        "explicit section factories are accepted and mismatched sections are rejected"
+      ]
+    },
+    {
+      "id": "api.task-group-flattening",
+      "source": "docs/api.md",
+      "anchor": "Nested task groups flatten with `.`. A child named `index` is the group default, so `tasks.claims.index` normalizes to task id `claims`, while `tasks.claims.report` normalizes to `claims.report`.",
+      "tests": [
+        "task groups flatten index paths and resolve group-local dependencies"
+      ]
+    },
+    {
+      "id": "api.task-group-relative-deps",
+      "source": "docs/api.md",
+      "anchor": "Within a task group, a dependency like `dependsOn: [\"report\"]` resolves to the group-local task `claims.report` when that task exists; source refs such as `storefront:claims.report` keep using `:` for the source namespace.",
+      "tests": [
+        "task groups flatten index paths and resolve group-local dependencies",
+        "task groups keep source namespace parsing unchanged"
+      ]
+    },
+    {
+      "id": "api.task-group-empty-task-brand",
+      "source": "docs/api.md",
+      "anchor": "Raw task objects still work, but branded `task({})` removes the empty-task ambiguity inside a group.",
+      "tests": [
+        "task groups flatten index paths and resolve group-local dependencies"
+      ]
+    },
+    {
+      "id": "api.sync-flattened-task-id",
+      "source": "docs/api.md",
+      "anchor": "Raw task sync is opt-in and generates names like `pipeline:task:typecheck` and `pipeline:task:claims.report`.",
+      "tests": [
+        "renders opt-in raw task scripts for flattened task group ids"
+      ]
+    },
+    {
+      "id": "sync.flattened-task-id",
+      "source": "docs/sync.md",
+      "anchor": "\"pipeline:task:claims.report\": \"async-pipeline run-task claims.report\"",
+      "tests": [
+        "renders opt-in raw task scripts for flattened task group ids"
       ]
     },
     {

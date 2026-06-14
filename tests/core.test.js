@@ -1,6 +1,153 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { buildGraph, cache, command, composePipelines, defineCache, definePipeline, dependsOn, env, execution, fileCache, githubConfigForJob, job, sh, source, task, tasksForJob, trigger, sandbox } from "../packages/pipeline-core/dist/index.js";
+import { ASYNC_PIPELINE_DECLARATION, brandDeclaration, buildGraph, cache, command, composePipelines, defineCache, definePipeline, dependsOn, env, execution, fileCache, githubConfigForJob, job, jobs as jobSection, parseTaskRef, readDeclaration, sh, source, task, tasks as taskSection, tasksForJob, trigger, sandbox } from "../packages/pipeline-core/dist/index.js";
+
+test("declaration factories expose non-enumerable metadata without changing JSON output", () => {
+  const examples = [
+    [task({}), "task"],
+    [job({ target: "build" }), "job"],
+    [sh`echo build`, "shell"],
+    [sh(() => sh`echo deferred`), "deferred-shell"],
+    [dependsOn("build"), "directive.dependsOn"],
+    [env.secret("TOKEN"), "env.secret"],
+    [env.var("MODE"), "env.var"],
+    [source.path({ path: "../app" }), "source.path"],
+    [trigger.manual(), "trigger.manual"],
+    [sandbox.host(), "sandbox.host"],
+    [execution.local(), "execution.local"],
+    [command.allow(), "command.allow"],
+    [cache.use("file:local"), "directive.cache"],
+    [defineCache(), "cache.registry"],
+    [fileCache(), "cache.store.file"],
+    [taskSection({}), "section.tasks"]
+  ];
+
+  for (const [value, kind] of examples) {
+    assert.equal(readDeclaration(value).kind, kind);
+    const descriptor = Object.getOwnPropertyDescriptor(value, ASYNC_PIPELINE_DECLARATION);
+    assert.equal(descriptor?.enumerable, false);
+    assert.equal(JSON.stringify(value).includes("@async/pipeline.declaration"), false);
+  }
+});
+
+test("explicit section factories are accepted and mismatched sections are rejected", () => {
+  const taskDefinitions = taskSection({
+    build: task({ run: sh`echo build` })
+  });
+
+  const pipeline = definePipeline({
+    name: "sections",
+    tasks: taskDefinitions,
+    jobs: jobSection({
+      verify: job({ target: "build" })
+    })
+  });
+
+  assert.equal(readDeclaration(taskDefinitions).kind, "section.tasks");
+  assert.deepEqual(Object.keys(pipeline.tasks), ["build"]);
+
+  assert.throws(() => definePipeline({
+    name: "bad-sections",
+    tasks: jobSection({}),
+    jobs: {
+      verify: job({ target: "build" })
+    }
+  }), (error) => error.code === "ASYNC_PIPELINE_SECTION_KIND_MISMATCH");
+});
+
+test("portable branded task and shell nodes normalize through validation", () => {
+  const portableShell = brandDeclaration({ command: "echo portable" }, "shell");
+  const pipeline = definePipeline({
+    name: "portable",
+    tasks: {
+      portable: brandDeclaration({ run: portableShell }, "task")
+    },
+    jobs: {
+      verify: job({ target: "portable" })
+    }
+  });
+
+  assert.deepEqual(pipeline.tasks.portable.steps, [{ kind: "shell", command: "echo portable" }]);
+
+  assert.throws(() => definePipeline({
+    name: "portable-bad",
+    tasks: {
+      portable: brandDeclaration({ run: brandDeclaration({ command: "echo portable", extra: true }, "shell") }, "task")
+    },
+    jobs: {
+      verify: job({ target: "portable" })
+    }
+  }), /unknown field "extra"/);
+});
+
+test("task groups flatten index paths and resolve group-local dependencies", () => {
+  const pipeline = definePipeline({
+    name: "groups",
+    tasks: {
+      build: task({ run: sh`echo build` }),
+      claims: {
+        index: task({ run: sh`echo claims` }),
+        report: task({ run: sh`echo report` }),
+        repair: task({ dependsOn: ["report"], run: sh`echo repair` })
+      }
+    },
+    jobs: {
+      verify: job({ target: "claims.repair" })
+    }
+  });
+
+  assert.deepEqual(Object.keys(pipeline.tasks).sort(), ["build", "claims", "claims.repair", "claims.report"]);
+  assert.deepEqual(pipeline.tasks["claims.repair"].dependsOn, ["claims.report"]);
+  assert.deepEqual(tasksForJob(pipeline, "verify").executionOrder, ["claims.report", "claims.repair"]);
+});
+
+test("task groups reject invalid keys, collisions, and ambiguous dependencies", () => {
+  assert.throws(() => definePipeline({
+    name: "bad-dot",
+    tasks: {
+      claims: {
+        "bad.key": task({ run: sh`echo bad` })
+      }
+    },
+    jobs: {
+      verify: job({ target: "claims.bad.key" })
+    }
+  }), (error) => error.code === "ASYNC_PIPELINE_TASK_GROUP_INVALID_KEY");
+
+  assert.throws(() => definePipeline({
+    name: "collision",
+    tasks: {
+      "claims.report": task({ run: sh`echo flat` }),
+      claims: {
+        report: task({ run: sh`echo grouped` })
+      }
+    },
+    jobs: {
+      verify: job({ target: "claims.report" })
+    }
+  }), (error) => error.code === "ASYNC_PIPELINE_TASK_ID_COLLISION");
+
+  assert.throws(() => definePipeline({
+    name: "ambiguous",
+    tasks: {
+      report: task({ run: sh`echo root` }),
+      claims: {
+        report: task({ run: sh`echo local` }),
+        repair: task({ dependsOn: ["report"], run: sh`echo repair` })
+      }
+    },
+    jobs: {
+      verify: job({ target: "claims.repair" })
+    }
+  }), (error) => error.code === "ASYNC_PIPELINE_TASK_DEPENDENCY_AMBIGUOUS");
+});
+
+test("task groups keep source namespace parsing unchanged", () => {
+  assert.deepEqual(parseTaskRef("storefront:claims.report"), {
+    source: "storefront",
+    taskId: "claims.report"
+  });
+});
 
 test("orders tasks deterministically with dependencies before dependents", () => {
   const pipeline = definePipeline({

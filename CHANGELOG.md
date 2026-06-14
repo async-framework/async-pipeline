@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.5 - 2026-06-13
+
+### Features
+
+- Branded declaration protocol: helper factories now attach non-enumerable `Symbol.for("@async/pipeline.declaration")` metadata so `definePipeline()` can distinguish inert declaration nodes without changing JSON output or enumerable config shape. The brand is a discriminator only; normal validation still rejects unknown fields and unsupported declaration versions.
+- Task groups: nested `tasks` objects flatten with `.` (`claims.index` -> `claims`, `claims.report` -> `claims.report`), group-local dependencies resolve before graph validation, and `:` remains reserved for source namespaces such as `storefront:claims.report`.
+- Optional section factories (`tasks`, `jobs`, `triggers`, `sources`, `taskDefaults`, `agents`, `sandboxes`) support advanced composition without requiring ceremony in normal object-literal configs.
+
 ## 0.2.4 - 2026-06-13
 
 ### Features

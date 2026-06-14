@@ -6,6 +6,7 @@ import {
   type CacheRef,
   type CacheRegistryDefinition
 } from "./cache.js";
+import { brandDeclaration } from "./declaration.js";
 import { AsyncPipelineError, pipelineError } from "./errors.js";
 
 export { defineCache, fileCache, memoryCache } from "./cache.js";
@@ -126,17 +127,17 @@ export interface Runtime<Input = unknown> {
 }
 
 export function compose<Input = unknown>(...items: RuntimeRunDefinition<Input>[]): RuntimeSeriesDefinition<Input> {
-  return {
+  return brandDeclaration({
     kind: "async-pipeline.runtime.series",
     items: normalizeVariadicRunItems(items)
-  };
+  }, "runtime.series");
 }
 
 export function series<Input = unknown>(items: RuntimeRunDefinition<Input>): RuntimeSeriesDefinition<Input> {
-  return {
+  return brandDeclaration({
     kind: "async-pipeline.runtime.series",
     items: runItemsFromDefinition(items)
-  };
+  }, "runtime.series");
 }
 
 export function parallel<Input = unknown>(items: readonly RuntimeRunDefinition<Input>[]): RuntimeParallelDefinition<Input>;
@@ -160,11 +161,11 @@ export function parallel<Input = unknown>(
     throw pipelineError("ASYNC_PIPELINE_RUNTIME_INVALID_CONCURRENCY", "Runtime parallel concurrency must be a positive integer.");
   }
 
-  return {
+  return brandDeclaration({
     kind: "async-pipeline.runtime.parallel",
     items: items.map((item) => Array.isArray(item) ? [...item] as RuntimeRunItem<Input>[] : item as RuntimeRunItem<Input>),
     concurrency: options.concurrency
-  };
+  }, "runtime.parallel");
 }
 
 export function branch<Input = unknown>(
@@ -172,12 +173,12 @@ export function branch<Input = unknown>(
   whenTrue: RuntimeRunDefinition<Input>,
   whenFalse?: RuntimeRunDefinition<Input>
 ): RuntimeBranchDefinition<Input> {
-  return {
+  return brandDeclaration({
     kind: "async-pipeline.runtime.branch",
     predicate,
     whenTrue: runItemsFromDefinition(whenTrue),
     whenFalse: whenFalse === undefined ? undefined : runItemsFromDefinition(whenFalse)
-  };
+  }, "runtime.branch");
 }
 
 export function task<Input = unknown>(config: RuntimeTaskConfig<Input>): RuntimeTaskDefinition<Input>;
@@ -191,14 +192,14 @@ export function task<Input = unknown>(
   }
 
   if (isRuntimeTaskArray(runOrChildren)) {
-    return { ...config, children: [...runOrChildren] };
+    return brandDeclaration({ ...config, children: [...runOrChildren] }, "runtime.task");
   }
 
-  return {
+  return brandDeclaration({
     ...config,
     run: runOrChildren === undefined ? config.run : runOrChildren as RuntimeRunDefinition<Input>,
     children: []
-  };
+  }, "runtime.task");
 }
 
 export function defineRuntime<Input = unknown>(
@@ -210,11 +211,11 @@ export function defineRuntime<Input = unknown>(
     ? rawTasks
     : rawTasks.length === 0 ? [] : [task({ id: "runtime" }, compose(...rawTasks as RuntimeRunItem<Input>[]))];
   const cache = Array.isArray(definition) ? defaultRuntimeCache() : (objectDefinition.cache ?? defaultRuntimeCache());
-  return {
+  return brandDeclaration({
     kind: "runtime-definition",
     tasks: normalizeRuntimeTasks(tasks),
     cache
-  };
+  }, "runtime.definition");
 }
 
 export function createRuntime<Input = unknown>(

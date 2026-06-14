@@ -48,6 +48,7 @@ sync: {
   tasks: {
     prefix: "pipeline",
     jobs: ["verify"],
+    tasks: ["claims.report"],
     scripts: { "sync:check": "sync check" }
   }
 }
@@ -57,6 +58,7 @@ sync: {
 {
   "scripts": {
     "pipeline:verify": "async-pipeline run verify",
+    "pipeline:task:claims.report": "async-pipeline run-task claims.report",
     "pipeline:sync:check": "async-pipeline sync check"
   }
 }

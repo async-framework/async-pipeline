@@ -12,9 +12,16 @@ import {
   type CacheRegistryInput,
   type CacheUseOptions
 } from "./cache.js";
+import {
+  assertSupportedDeclaration,
+  brandDeclaration,
+  hasDeclarationKind,
+  readDeclaration
+} from "./declaration.js";
 import { pipelineError } from "./errors.js";
 
 export * from "./cache.js";
+export * from "./declaration.js";
 export * from "./errors.js";
 
 export type TaskId = string;
@@ -324,6 +331,13 @@ export interface TaskDefinition {
   steps?: TaskRunItem[];
 }
 
+export interface TaskGroupDefinition {
+  [taskId: string]: TaskTreeDefinition;
+}
+
+export type TaskTreeDefinition = TaskDefinition | TaskGroupDefinition;
+export type TaskSectionDefinition = Record<TaskId, TaskTreeDefinition>;
+
 export type TaskRunItem = TaskStep | TaskDirective;
 export type TaskRunDefinition = TaskRunItem | readonly TaskRunItem[];
 
@@ -427,7 +441,7 @@ export interface PipelineDefinition {
   triggers?: Record<TriggerId, TriggerDefinition>;
   sync?: PipelineSyncConfig;
   sources?: Record<SourceId, SourceDefinition>;
-  tasks: Record<TaskId, TaskDefinition>;
+  tasks: TaskSectionDefinition;
   jobs: Record<JobId, JobDefinition>;
 }
 
@@ -517,7 +531,7 @@ export function sh(factory: DeferredShellCommandFactory): DeferredShellCommand;
 export function sh(strings: TemplateStringsArray, ...values: unknown[]): ShellCommand;
 export function sh(first: TemplateStringsArray | DeferredShellCommandFactory, ...values: unknown[]): ShellCommand | DeferredShellCommand {
   if (typeof first === "function") {
-    return { kind: "deferred-shell", command: first };
+    return brandDeclaration({ kind: "deferred-shell", command: first }, "deferred-shell");
   }
 
   let command = "";
@@ -527,10 +541,12 @@ export function sh(first: TemplateStringsArray | DeferredShellCommandFactory, ..
       command += String(values[index]);
     }
   }
-  return { kind: "shell", command };
+  return brandDeclaration({ kind: "shell", command }, "shell");
 }
 
 const AGENT_STEP_FIELDS = new Set(["use", "prompt", "model", "stdoutTo"]);
+const DECLARED_AGENT_STEP_FIELDS = new Set(["kind", ...AGENT_STEP_FIELDS]);
+const SHELL_STEP_FIELDS = new Set(["kind", "command"]);
 
 export function agent(options: { use: AgentProfileId | EnvVarRef; prompt: string; model?: string | EnvVarRef; stdoutTo?: string }): AgentStep {
   rejectUnknownFields(AGENT_STEP_FIELDS, options, "agent() step");
@@ -555,7 +571,7 @@ export function agent(options: { use: AgentProfileId | EnvVarRef; prompt: string
       );
     }
   }
-  const step: AgentStep = { kind: "agent", use, prompt: options.prompt };
+  const step: AgentStep = brandDeclaration({ kind: "agent", use, prompt: options.prompt }, "agent");
   if (options.model !== undefined) step.model = options.model;
   if (options.stdoutTo !== undefined) step.stdoutTo = options.stdoutTo;
   return step;
@@ -575,149 +591,177 @@ export function task(definition: TaskDefinition, run?: TaskRunDefinition): TaskD
   if (definition.run !== undefined && run !== undefined) {
     throw pipelineError("ASYNC_PIPELINE_TASK_ARGUMENT_CONFLICT", "Do not pass a second task argument when config.run is defined.");
   }
-  return run === undefined ? definition : { ...definition, run };
+  return brandDeclaration(run === undefined ? definition : { ...definition, run }, "task");
 }
 
 export function job(definition: JobDefinition): JobDefinition {
-  return definition;
+  return brandDeclaration(definition, "job");
 }
 
 function envVar(name: string): EnvVarRef;
 function envVar(name: string, options: { default: string }): EnvVarRef;
 function envVar(name: string, values: EnvVarMap, options?: { default?: string }): EnvVarRef;
 function envVar(name: string, valuesOrOptions?: EnvVarMap | { default: string }, options: { default?: string } = {}): EnvVarRef {
-  if (!valuesOrOptions) return { kind: "async-pipeline.env.var", name };
+  if (!valuesOrOptions) return brandDeclaration({ kind: "async-pipeline.env.var", name }, "env.var");
   if (isDefaultOnlyEnvOptions(valuesOrOptions) && Object.keys(valuesOrOptions).length === 1) {
-    return { kind: "async-pipeline.env.var", name, default: valuesOrOptions.default };
+    return brandDeclaration({ kind: "async-pipeline.env.var", name, default: valuesOrOptions.default }, "env.var");
   }
-  return {
+  return brandDeclaration({
     kind: "async-pipeline.env.var",
     name,
     values: { ...valuesOrOptions },
     default: options.default
-  };
+  }, "env.var");
 }
 
 export const env = {
   secret(name: string): EnvSecretRef {
-    return { kind: "async-pipeline.env.secret", name };
+    return brandDeclaration({ kind: "async-pipeline.env.secret", name }, "env.secret");
   },
   var: envVar
 };
 
 export const sandbox = {
   host(): HostSandboxDefinition {
-    return { kind: "host" };
+    return brandDeclaration({ kind: "host" }, "sandbox.host");
   },
   lima(options: Omit<LimaSandboxDefinition, "kind"> = {}): LimaSandboxDefinition {
-    return { kind: "lima", vm: options.vm };
+    return brandDeclaration({ kind: "lima", vm: options.vm }, "sandbox.lima");
   },
   docker(options: Omit<DockerSandboxDefinition, "kind">): DockerSandboxDefinition {
-    return {
+    return brandDeclaration({
       kind: "docker",
       image: options.image,
       workdir: options.workdir,
       volumes: options.volumes ? options.volumes.map((volume) => ({ ...volume })) : undefined
-    };
+    }, "sandbox.docker");
   },
   container(options: Omit<ContainerSandboxDefinition, "kind">): ContainerSandboxDefinition {
-    return {
+    return brandDeclaration({
       kind: "container",
       image: options.image,
       workdir: options.workdir,
       volumes: options.volumes ? options.volumes.map((volume) => ({ ...volume })) : undefined
-    };
+    }, "sandbox.container");
   }
 };
 
 export const execution = {
   local(options: Omit<LocalExecutionProfileDefinition, "kind"> = {}): LocalExecutionProfileDefinition {
-    return {
+    return brandDeclaration({
       kind: "local",
       sandbox: options.sandbox,
       provider: options.provider
-    };
+    }, "execution.local");
   },
   github(options: Omit<GitHubExecutionProfileDefinition, "kind">): GitHubExecutionProfileDefinition {
-    return {
+    return brandDeclaration({
       kind: "github",
       sandbox: options.sandbox,
       provider: options.provider,
       runsOn: options.runsOn ? cloneRunsOnEntry(options.runsOn) : undefined,
       runsOnMatrix: options.runsOnMatrix ? options.runsOnMatrix.map(cloneRunsOnEntry) : undefined
-    };
+    }, "execution.github");
   }
 };
 
 export const command = {
   policy(options: Omit<CommandPolicy, "rules"> & { rules?: CommandRule[] } = {}): CommandPolicy {
-    return {
+    return brandDeclaration({
       rules: options.rules ? options.rules.map(cloneCommandRule) : [],
       fallback: options.fallback ? cloneCommandAction(options.fallback) : undefined,
       record: options.record,
       output: options.output ? { ...options.output } : undefined,
       shims: options.shims ? [...options.shims] : undefined
-    };
+    }, "command.policy");
   },
   rule(options: CommandRule): CommandRule {
-    return cloneCommandRule(options);
+    return brandDeclaration(cloneCommandRule(options), "command.rule");
   },
   allow(options: { output?: CommandOutputPolicy } = {}): CommandAction {
-    return { kind: "async-pipeline.command.allow", output: options.output ? { ...options.output } : undefined };
+    return brandDeclaration({ kind: "async-pipeline.command.allow", output: options.output ? { ...options.output } : undefined }, "command.allow");
   },
   deny(options: { message?: string; output?: CommandOutputPolicy } = {}): CommandAction {
-    return { kind: "async-pipeline.command.deny", message: options.message, output: options.output ? { ...options.output } : undefined };
+    return brandDeclaration({ kind: "async-pipeline.command.deny", message: options.message, output: options.output ? { ...options.output } : undefined }, "command.deny");
   },
   mock(options: { code?: number; stdout?: string; stderr?: string; output?: CommandOutputPolicy } = {}): CommandAction {
-    return {
+    return brandDeclaration({
       kind: "async-pipeline.command.mock",
       code: options.code,
       stdout: options.stdout,
       stderr: options.stderr,
       output: options.output ? { ...options.output } : undefined
-    };
+    }, "command.mock");
   },
   requireApproval(options: { message?: string; output?: CommandOutputPolicy } = {}): CommandAction {
-    return { kind: "async-pipeline.command.requireApproval", message: options.message, output: options.output ? { ...options.output } : undefined };
+    return brandDeclaration({ kind: "async-pipeline.command.requireApproval", message: options.message, output: options.output ? { ...options.output } : undefined }, "command.requireApproval");
   },
   requireEnvironment(options: { name: string; output?: CommandOutputPolicy }): CommandAction {
-    return { kind: "async-pipeline.command.requireEnvironment", name: options.name, output: options.output ? { ...options.output } : undefined };
+    return brandDeclaration({ kind: "async-pipeline.command.requireEnvironment", name: options.name, output: options.output ? { ...options.output } : undefined }, "command.requireEnvironment");
   }
 };
 
 export const trigger = {
   manual(): TriggerDefinition {
-    return { type: "manual" };
+    return brandDeclaration({ type: "manual" }, "trigger.manual");
   },
   github(options: { events: string[]; branches?: string[]; paths?: string[]; tags?: string[] }): TriggerDefinition {
-    return {
+    return brandDeclaration({
       type: "github",
       events: [...options.events],
       branches: options.branches ? [...options.branches] : undefined,
       paths: options.paths ? [...options.paths] : undefined,
       tags: options.tags ? [...options.tags] : undefined
-    };
+    }, "trigger.github");
   },
   cron(cron: string, options: { timezone?: string } = {}): TriggerDefinition {
-    return { type: "schedule", cron, timezone: options.timezone };
+    return brandDeclaration({ type: "schedule", cron, timezone: options.timezone }, "trigger.cron");
   },
   schedule(cron: string): TriggerDefinition {
-    return { type: "schedule", cron };
+    return brandDeclaration({ type: "schedule", cron }, "trigger.schedule");
   }
 };
 
 export function dependsOn(...taskIds: TaskId[]): DependsOnDirective {
-  return { kind: "async-pipeline.directive.dependsOn", taskIds };
+  return brandDeclaration({ kind: "async-pipeline.directive.dependsOn", taskIds }, "directive.dependsOn");
 }
 
 export const source = {
   git(definition: Omit<GitSourceDefinition, "type">): GitSourceDefinition {
-    return { ...definition, type: "git" };
+    return brandDeclaration({ ...definition, type: "git" }, "source.git");
   },
   path(definition: Omit<PathSourceDefinition, "type">): PathSourceDefinition {
-    return { ...definition, type: "path" };
+    return brandDeclaration({ ...definition, type: "path" }, "source.path");
   }
 };
+
+export function tasks(definitions: TaskSectionDefinition): TaskSectionDefinition {
+  return brandDeclaration(definitions, "section.tasks");
+}
+
+export function jobs(definitions: Record<JobId, JobDefinition>): Record<JobId, JobDefinition> {
+  return brandDeclaration(definitions, "section.jobs");
+}
+
+export function triggers(definitions: Record<TriggerId, TriggerDefinition>): Record<TriggerId, TriggerDefinition> {
+  return brandDeclaration(definitions, "section.triggers");
+}
+
+export function sources(definitions: Record<SourceId, SourceDefinition>): Record<SourceId, SourceDefinition> {
+  return brandDeclaration(definitions, "section.sources");
+}
+
+export function taskDefaults(definitions: Record<string, Partial<TaskDefinition>>): Record<string, Partial<TaskDefinition>> {
+  return brandDeclaration(definitions, "section.taskDefaults");
+}
+
+export function agents(definitions: Record<AgentProfileId, AgentProfileDefinition>): Record<AgentProfileId, AgentProfileDefinition> {
+  return brandDeclaration(definitions, "section.agents");
+}
+
+export function sandboxes(definitions: Record<SandboxId, SandboxDefinition>): Record<SandboxId, SandboxDefinition> {
+  return brandDeclaration(definitions, "section.sandboxes");
+}
 
 const PIPELINE_FIELDS = new Set(["name", "env", "commands", "agents", "sandboxes", "execution", "cache", "namedInputs", "taskDefaults", "triggers", "sync", "sources", "tasks", "jobs"]);
 const AGENT_PROFILE_FIELDS = new Set(["command", "model"]);
@@ -727,6 +771,21 @@ const EXECUTION_PROFILE_FIELDS = new Set(["kind", "sandbox", "provider", "runsOn
 const GITHUB_JOB_FIELDS = new Set(["environment", "permissions", "runsOn", "runsOnMatrix"]);
 const GITHUB_PERMISSION_FIELDS = new Set(["contents", "idToken", "issues", "packages", "pullRequests"]);
 const CONTAINER_PROVIDERS = new Set(["auto", "docker", "apple-container", "lima"]);
+const SECTION_KINDS = {
+  agents: "section.agents",
+  sandboxes: "section.sandboxes",
+  taskDefaults: "section.taskDefaults",
+  triggers: "section.triggers",
+  sources: "section.sources",
+  tasks: "section.tasks",
+  jobs: "section.jobs"
+} as const;
+
+interface FlattenedTaskDefinition {
+  id: TaskId;
+  definition: TaskDefinition;
+  groupPath: string[];
+}
 
 function rejectUnknownFields(known: Set<string>, value: object, where: string): void {
   for (const key of Object.keys(value)) {
@@ -763,9 +822,6 @@ function validateDefinitionShape(definition: PipelineDefinition): void {
       );
     }
   }
-  for (const [id, taskDefinition] of Object.entries(definition.tasks ?? {})) {
-    rejectUnknownFields(TASK_FIELDS, taskDefinition, `Task "${id}"`);
-  }
   for (const [id, defaults] of Object.entries(definition.taskDefaults ?? {})) {
     rejectUnknownFields(TASK_FIELDS, defaults, `taskDefaults["${id}"]`);
   }
@@ -801,11 +857,128 @@ function validateDefinitionShape(definition: PipelineDefinition): void {
   }
 }
 
+function normalizePipelineSections(definition: PipelineDefinition): PipelineDefinition {
+  return {
+    ...definition,
+    agents: normalizeSection("agents", definition.agents),
+    sandboxes: normalizeSection("sandboxes", definition.sandboxes),
+    taskDefaults: normalizeSection("taskDefaults", definition.taskDefaults),
+    triggers: normalizeSection("triggers", definition.triggers),
+    sources: normalizeSection("sources", definition.sources),
+    tasks: normalizeSection("tasks", definition.tasks),
+    jobs: normalizeSection("jobs", definition.jobs)
+  };
+}
+
+function normalizeSection<Key extends keyof typeof SECTION_KINDS, Value extends object | undefined>(
+  key: Key,
+  value: Value
+): Value {
+  if (value === undefined) return value;
+  if (!isObjectRecord(value)) {
+    throw pipelineError("ASYNC_PIPELINE_SECTION_INVALID", `Pipeline section "${key}" must be an object.`);
+  }
+
+  const expectedKind = SECTION_KINDS[key];
+  const metadata = assertSupportedDeclaration(value);
+  if (metadata) {
+    if (metadata.kind !== expectedKind) {
+      throw pipelineError(
+        "ASYNC_PIPELINE_SECTION_KIND_MISMATCH",
+        `Pipeline section "${key}" expected declaration kind "${expectedKind}", received "${metadata.kind}".`
+      );
+    }
+    return value;
+  }
+
+  return brandDeclaration(value, expectedKind) as Value;
+}
+
+function flattenTaskDefinitions(definitions: TaskSectionDefinition): FlattenedTaskDefinition[] {
+  const tasks: FlattenedTaskDefinition[] = [];
+  const seen = new Set<TaskId>();
+
+  function visit(node: TaskGroupDefinition, path: string[]): void {
+    for (const [key, value] of Object.entries(node)) {
+      validateTaskTreeKey(key, path);
+      if (!isObjectRecord(value)) {
+        throw pipelineError("ASYNC_PIPELINE_TASK_TREE_INVALID", `Task tree entry "${[...path, key].join(".")}" must be an object.`);
+      }
+      const isTask = isTaskDefinitionNode(value, path);
+      if (isTask) {
+        const id = taskTreeId(path, key);
+        validateLocalTaskId(id);
+        if (seen.has(id)) {
+          throw pipelineError("ASYNC_PIPELINE_TASK_ID_COLLISION", `Task group entry "${[...path, key].join(".")}" normalizes to duplicate task id "${id}".`);
+        }
+        seen.add(id);
+        rejectUnknownFields(TASK_FIELDS, value, `Task "${id}"`);
+        tasks.push({ id, definition: value as TaskDefinition, groupPath: path });
+        continue;
+      }
+      if (key.includes(".")) {
+        throw pipelineError("ASYNC_PIPELINE_TASK_GROUP_INVALID_KEY", `Task group key "${key}" cannot contain ".". Use nested objects instead.`);
+      }
+      visit(value as TaskGroupDefinition, [...path, key]);
+    }
+  }
+
+  visit(definitions, []);
+  return tasks;
+}
+
+function validateTaskTreeKey(key: string, path: string[]): void {
+  if (!key.trim()) {
+    throw pipelineError("ASYNC_PIPELINE_TASK_GROUP_INVALID_KEY", "Task group key cannot be empty.");
+  }
+  if (key.includes(":")) {
+    throw pipelineError("ASYNC_PIPELINE_TASK_GROUP_INVALID_KEY", `Task group key "${key}" cannot contain ":". Use source namespaces through dependsOn instead.`);
+  }
+  if (path.length > 0 && key.includes(".")) {
+    throw pipelineError("ASYNC_PIPELINE_TASK_GROUP_INVALID_KEY", `Nested task group key "${key}" cannot contain ".". Use nested objects instead.`);
+  }
+}
+
+function taskTreeId(path: string[], key: string): TaskId {
+  const segments = key === "index" && path.length > 0 ? path : [...path, key];
+  return segments.join(".");
+}
+
+function isTaskDefinitionNode(value: Record<string, unknown>, path: string[]): boolean {
+  const metadata = assertSupportedDeclaration(value);
+  if (metadata?.kind === "task") return true;
+  if (metadata?.kind.startsWith("section.")) return false;
+  if (metadata) return false;
+  if (Object.keys(value).some((key) => TASK_FIELDS.has(key))) return true;
+  return path.length === 0 && Object.keys(value).length === 0;
+}
+
+function resolveTaskDependencies(taskId: TaskId, groupPath: string[], dependencies: TaskId[], knownTaskIds: Set<TaskId>): TaskId[] {
+  return dependencies.map((dependency) => resolveTaskDependency(taskId, groupPath, dependency, knownTaskIds));
+}
+
+function resolveTaskDependency(taskId: TaskId, groupPath: string[], dependency: TaskId, knownTaskIds: Set<TaskId>): TaskId {
+  if (isNamespacedTaskRef(dependency) || groupPath.length === 0) return dependency;
+
+  const groupCandidate = [...groupPath, dependency].join(".");
+  const groupMatch = knownTaskIds.has(groupCandidate);
+  const rootMatch = knownTaskIds.has(dependency);
+  if (groupMatch && rootMatch && groupCandidate !== dependency) {
+    throw pipelineError(
+      "ASYNC_PIPELINE_TASK_DEPENDENCY_AMBIGUOUS",
+      `Task "${taskId}" depends on ambiguous local task "${dependency}". Use "${groupCandidate}" or "${dependency}" explicitly.`
+    );
+  }
+  if (groupMatch) return groupCandidate;
+  return dependency;
+}
+
 export function definePipeline(definition: PipelineDefinition): NormalizedPipeline {
   return normalizePipeline(definition);
 }
 
 export function normalizePipeline(definition: PipelineDefinition): NormalizedPipeline {
+  definition = normalizePipelineSections(definition);
   validateDefinitionShape(definition);
   const namedInputs = definition.namedInputs ?? {};
   const cacheRegistry = normalizeCacheRegistry(definition.cache);
@@ -817,17 +990,19 @@ export function normalizePipeline(definition: PipelineDefinition): NormalizedPip
   }
 
   const tasks: Record<TaskId, NormalizedTask> = {};
+  const flattenedTaskDefinitions = flattenTaskDefinitions(definition.tasks);
+  const knownTaskIds = new Set(flattenedTaskDefinitions.map((entry) => entry.id));
 
-  for (const [id, taskDefinition] of Object.entries(definition.tasks)) {
+  for (const { id, definition: taskDefinition, groupPath } of flattenedTaskDefinitions) {
     validateLocalTaskId(id);
     const defaults = definition.taskDefaults?.[id] ?? definition.taskDefaults?.[taskName(id)] ?? {};
     const merged = { ...defaults, ...taskDefinition };
     const runItems = merged.steps ? [...merged.steps] : runItemsFromDefinition(merged.run);
     const { steps, cacheDirectives, dependsOnDirectives } = partitionRunItems(runItems);
-    const liftedDependsOn = uniqueTaskIds([
+    const liftedDependsOn = resolveTaskDependencies(id, groupPath, uniqueTaskIds([
       ...(merged.dependsOn ?? []),
       ...dependsOnDirectives.flatMap((directive) => directive.taskIds)
-    ]);
+    ]), knownTaskIds);
     const cache = normalizeCache(merged.cache ?? cacheDirectives[0], cacheRegistry);
     const retry = normalizeRetry(merged.retry);
     const timeoutMs = normalizeTimeout(merged.timeout);
@@ -877,6 +1052,14 @@ export function normalizePipeline(definition: PipelineDefinition): NormalizedPip
 
 function isDefaultOnlyEnvOptions(value: EnvVarMap | { default: string }): value is { default: string } {
   return typeof value.default === "string";
+}
+
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isEnvVarRef(value: unknown): value is EnvVarRef {
+  return isObjectRecord(value) && value.kind === "async-pipeline.env.var";
 }
 
 function normalizeAgents(definitions: Record<AgentProfileId, AgentProfileDefinition> = {}): Record<AgentProfileId, AgentProfileDefinition> {
@@ -1556,7 +1739,8 @@ function partitionRunItems(items: readonly TaskRunItem[]): {
   const cacheDirectives: CacheDirective[] = [];
   const dependsOnDirectives: DependsOnDirective[] = [];
 
-  for (const item of items) {
+  for (const rawItem of items) {
+    const item = normalizeDeclaredRunItem(rawItem);
     if (isCacheDirective(item)) {
       cacheDirectives.push(item);
       continue;
@@ -1575,10 +1759,47 @@ function partitionRunItems(items: readonly TaskRunItem[]): {
   return { steps, cacheDirectives, dependsOnDirectives };
 }
 
+function normalizeDeclaredRunItem(item: TaskRunItem): TaskRunItem {
+  const metadata = assertSupportedDeclaration(item);
+  if (!metadata || !isObjectRecord(item)) return item;
+  if (metadata.kind === "shell") {
+    rejectUnknownFields(SHELL_STEP_FIELDS, item, "shell declaration");
+    const command = item.command;
+    if (typeof command !== "string") {
+      throw pipelineError("ASYNC_PIPELINE_DECLARATION_INVALID", "Shell declaration requires a string command.");
+    }
+    return brandDeclaration({ kind: "shell", command }, "shell");
+  }
+  if (metadata.kind === "deferred-shell") {
+    rejectUnknownFields(SHELL_STEP_FIELDS, item, "deferred shell declaration");
+    const command = item.command;
+    if (typeof command !== "function") {
+      throw pipelineError("ASYNC_PIPELINE_DECLARATION_INVALID", "Deferred shell declaration requires a command function.");
+    }
+    return brandDeclaration({ kind: "deferred-shell", command: command as DeferredShellCommandFactory }, "deferred-shell");
+  }
+  if (metadata.kind === "agent") {
+    rejectUnknownFields(DECLARED_AGENT_STEP_FIELDS, item, "agent declaration");
+    const use = item.use;
+    const prompt = item.prompt;
+    if ((typeof use !== "string" && !isEnvVarRef(use)) || (typeof use === "string" && use.length === 0)) {
+      throw pipelineError("ASYNC_PIPELINE_AGENT_INVALID", 'agent declaration requires "use": a non-empty profile id or env.var(...).');
+    }
+    if (typeof prompt !== "string" || prompt.length === 0) {
+      throw pipelineError("ASYNC_PIPELINE_AGENT_INVALID", 'agent declaration requires a non-empty "prompt" string.');
+    }
+    const step: AgentStep = brandDeclaration({ kind: "agent", use: use as AgentProfileId | EnvVarRef, prompt }, "agent");
+    if (item.model !== undefined) step.model = item.model as string | EnvVarRef;
+    if (item.stdoutTo !== undefined) step.stdoutTo = item.stdoutTo as string;
+    return step;
+  }
+  return item;
+}
+
 function isDependsOnDirective(value: unknown): value is DependsOnDirective {
   return Boolean(value)
     && typeof value === "object"
-    && (value as { kind?: unknown }).kind === "async-pipeline.directive.dependsOn";
+    && ((value as { kind?: unknown }).kind === "async-pipeline.directive.dependsOn" || hasDeclarationKind(value, "directive.dependsOn"));
 }
 
 function uniqueTaskIds(taskIds: readonly TaskId[]): TaskId[] {

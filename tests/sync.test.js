@@ -59,6 +59,43 @@ test("renders package scripts for synced jobs and opt-in raw tasks", async () =>
   }
 });
 
+test("renders opt-in raw task scripts for flattened task group ids", async () => {
+  const dir = mkdtempSyncCompat("async-pipeline-sync-groups-");
+  try {
+    writeJson(join(dir, "package.json"), { name: "fixture", type: "module", scripts: {} });
+    const pipeline = definePipeline({
+      name: "test",
+      sync: {
+        tasks: {
+          prefix: "pipeline",
+          runners: ["package"],
+          targets: "root",
+          jobs: [],
+          tasks: ["claims", "claims.report"]
+        }
+      },
+      tasks: {
+        claims: {
+          index: task({ run: sh`echo claims` }),
+          report: task({ run: sh`echo report` })
+        }
+      },
+      jobs: {
+        verify: job({ target: "claims" })
+      }
+    });
+
+    const rendered = await renderTaskSync(pipeline, { cwd: dir, configPath: join(dir, "pipeline.ts") });
+
+    assert.deepEqual(rendered.manifests[0].commands, [
+      { name: "pipeline:task:claims", value: "async-pipeline run-task claims" },
+      { name: "pipeline:task:claims.report", value: "async-pipeline run-task claims.report" }
+    ]);
+  } finally {
+    rmSync(dir, { force: true, recursive: true });
+  }
+});
+
 test("sync.tasks true syncs jobs only to root package scripts", async () => {
   const dir = mkdtempSyncCompat("async-pipeline-sync-defaults-");
   try {

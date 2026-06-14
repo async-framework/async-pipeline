@@ -53,7 +53,15 @@ Fields:
 
 Pipeline definitions are metadata. Importing a pipeline, calling `definePipeline`, using directives, or reading metadata does not execute tasks, open cache connections, start cron, clone repos, or evaluate function steps.
 
+The API boundary is split deliberately: `define*` helpers declare inert, inspectable configuration; `create*` helpers bind a definition to runtime behavior; `run*` APIs and CLI commands execute through a chosen context.
+
 Unknown fields in the pipeline, tasks, taskDefaults, jobs, or a job's `github` config are rejected with `ASYNC_PIPELINE_UNKNOWN_FIELD`, so a typo such as `timout` fails loudly instead of silently changing behavior. Fields that are accepted but only declare metadata are documented as such on this page.
+
+Declaration helpers attach non-enumerable metadata under `Symbol.for("@async/pipeline.declaration")`, so JSON output and enumerable config shape stay unchanged.
+
+The declaration brand is a discriminator, not trust: branded task, shell, and agent nodes are still validated, and unknown fields are still rejected.
+
+Optional section factories such as `tasks({ ... })`, `jobs({ ... })`, and `sources({ ... })` are accepted without double wrapping; plain top-level section objects remain the default authoring style.
 
 ## env
 
@@ -214,6 +222,12 @@ Fields:
 | `steps` | Multiple shell commands, function steps, or static directives. |
 
 `dependsOn` is the author-facing dependency keyword.
+
+Nested task groups flatten with `.`. A child named `index` is the group default, so `tasks.claims.index` normalizes to task id `claims`, while `tasks.claims.report` normalizes to `claims.report`.
+
+Within a task group, a dependency like `dependsOn: ["report"]` resolves to the group-local task `claims.report` when that task exists; source refs such as `storefront:claims.report` keep using `:` for the source namespace.
+
+Raw task objects still work, but branded `task({})` removes the empty-task ambiguity inside a group.
 
 Directive form is available for reusable stacks:
 
@@ -473,7 +487,7 @@ sync: {
 }
 ```
 
-Package targets match `package.json#name`. Path targets must point at `package.json`, `deno.json`, or `deno.jsonc`. Raw task sync is opt-in and generates names like `pipeline:task:typecheck`.
+Package targets match `package.json#name`. Path targets must point at `package.json`, `deno.json`, or `deno.jsonc`. Raw task sync is opt-in and generates names like `pipeline:task:typecheck` and `pipeline:task:claims.report`.
 
 Task sync writes `.async-pipeline/tasks.lock.json`. The lock records the generator version, config path, prefix, runners, targets, resolved manifest paths, generated command names and values, and a rendered hash. Existing unmanaged scripts or Deno tasks are never overwritten; conflicts throw `ASYNC_PIPELINE_SYNC_CONFLICT`.
 

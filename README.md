@@ -134,6 +134,29 @@ sync      = generated files to keep current
 
 Triggers describe when jobs should run. Sync describes which generated files should be kept current.
 
+Nested task groups flatten with `.`: `claims.index` runs as `claims`, and `claims.report` runs as `claims.report`. A helper package can return a nested task object and the host pipeline decides where to mount it:
+
+```ts
+function claimsTasks({ task, sh }) {
+  return {
+    index: task({ run: sh`async-claims check` }),
+    report: task({ run: sh`async-claims check --format json --no-fail` })
+  };
+}
+
+export default definePipeline({
+  name: "app",
+  tasks: {
+    claims: claimsTasks({ task, sh })
+  },
+  jobs: {
+    verify: job({ target: "claims" })
+  }
+});
+```
+
+Source namespaces still use `:`, so `storefront:claims.report` means task `claims.report` from source `storefront`.
+
 Add scripts manually, or let task sync write package-manager commands for selected jobs:
 
 ```json
@@ -270,6 +293,7 @@ That can generate:
   "scripts": {
     "pipeline:verify": "async-pipeline run verify",
     "pipeline:task:typecheck": "async-pipeline run-task typecheck",
+    "pipeline:task:claims.report": "async-pipeline run-task claims.report",
     "pipeline:sync:check": "async-pipeline sync check"
   }
 }

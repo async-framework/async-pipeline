@@ -65,6 +65,6 @@ pnpm async-pipeline github generate
 
 ## Package Shape
 
-Only `@async/pipeline` is published. The monorepo's core, node, runtime, and Lima implementation pieces are private/bundled behind this package's `dist/internal` output during build.
+Install and import `@async/pipeline`. Public subpaths such as `@async/pipeline/node`, `@async/pipeline/lima`, and `@async/pipeline/runtime` are bundled with the package.
 
 Full docs live in the repository README and `docs/` directory.

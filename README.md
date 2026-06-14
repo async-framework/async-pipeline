@@ -376,17 +376,6 @@ The checked-in workflow targets Node `>= 24` on GitHub-hosted Linux (`ubuntu-lat
 - Automatic sandbox routing. Isolation is opt-in: select it with `--sandbox`, `--execution`, or programmatic run options; `sandbox.container(...)` is portable OCI image intent, while Docker, Apple container, and Lima are provider choices.
 - Deno or Ollama runtime integration. They can be declared as optional tool requirements, but they are not package dependencies.
 
-## Workspace Layout
-
-Only `@async/pipeline` is published to npm. The other workspace packages are private implementation packages that are bundled into the public package during build.
-
-| Workspace package | Purpose |
-| --- | --- |
-| `@async/pipeline` | Public package, `async-pipeline` CLI bin, and bundled dist output. |
-| `@async/pipeline-core` | Private pipeline, runtime, cache, task, job, graph, source, and type contracts. |
-| `@async/pipeline-node` | Private CLI, filesystem store, scheduler, host runner, source sync, and doctor checks. |
-| `@async/pipeline-adapter-lima` | Private compatibility package that re-exports the Lima workspace/executor. |
-
 ## Releases, Snapshots, And The npm Fallback
 
 Publishing runs through the same `pipeline.ts` that verifies the repo — the model is PatrickJS's [GitHub-native npm preview packages Gist](https://gist.github.com/PatrickJS/3fa2925713fcdf75a27a505ce2cd0d80), dogfooded (the standalone template lives in [examples/github-native-npm-preview-package](examples/github-native-npm-preview-package)):

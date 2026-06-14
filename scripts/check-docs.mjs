@@ -11,6 +11,12 @@ import { dirname, join, resolve } from "node:path";
 
 const root = process.cwd();
 const failures = [];
+const publicReadmes = ["README.md", "packages/pipeline/README.md"];
+const privateWorkspacePackages = [
+  "@async/pipeline-core",
+  "@async/pipeline-node",
+  "@async/pipeline-adapter-lima"
+];
 
 function fail(message) {
   failures.push(message);
@@ -30,6 +36,17 @@ async function markdownFiles() {
   }
   await walk("docs");
   return files;
+}
+
+async function checkPublicReadmes() {
+  for (const file of publicReadmes) {
+    const text = await readFile(join(root, file), "utf8");
+    for (const packageName of privateWorkspacePackages) {
+      if (text.includes(packageName)) {
+        fail(`${file}: public README mentions private workspace package ${packageName}`);
+      }
+    }
+  }
 }
 
 // GitHub-style heading slugs: lowercase, drop punctuation, spaces to dashes.
@@ -81,6 +98,7 @@ for (const file of await markdownFiles()) {
     }
   }
 }
+await checkPublicReadmes();
 
 if (failures.length > 0) {
   for (const message of failures) console.error(`DOCS ${message}`);

@@ -9,8 +9,9 @@
 //   release publish the package.json version and move the latest dist-tag
 //
 // GitHub Packages requires the npm scope to match the repo owner, so the
-// mirror publishes as @async-framework/pipeline while npm keeps
-// @async/pipeline. Published versions are immutable; re-runs skip cleanly.
+// mirror publishes under the repository-owner scope. For async/pipeline that
+// is @async/pipeline on npm.pkg.github.com. Published versions are immutable;
+// re-runs skip cleanly.
 // Fork PRs are skipped: their GITHUB_TOKEN cannot write packages, and PR
 // branches from forks are untrusted by default.
 import { spawnSync } from "node:child_process";
@@ -41,7 +42,7 @@ if (!["pr", "main", "release"].includes(mode ?? "")) {
 
 const manifest = JSON.parse(await readFile(join(packageDir, "package.json"), "utf8"));
 
-const repository = process.env.GITHUB_REPOSITORY ?? "async-framework/async-pipeline";
+const repository = process.env.GITHUB_REPOSITORY ?? "async/pipeline";
 const owner = (process.env.GITHUB_REPOSITORY_OWNER ?? repository.split("/")[0]).toLowerCase();
 const mirrorName = `@${owner}/${manifest.name.split("/")[1]}`;
 if (!NAME_PATTERN.test(mirrorName)) {
@@ -173,6 +174,12 @@ function npm(args, options = {}) {
 }
 
 const spec = `${mirrorName}@${version}`;
+
+function installTarget(versionOrTag) {
+  const target = `${mirrorName}@${versionOrTag}`;
+  return mirrorName === manifest.name ? target : `${manifest.name}@npm:${target}`;
+}
+
 // A registry outage must not look like a missing version: only a 404-shaped
 // failure may fall through to publish.
 const view = npm(["view", spec, "version", "--registry", GITHUB_REGISTRY], { capture: true });
@@ -235,12 +242,12 @@ if (mode === "release") {
     "",
     "Latest successful build for this PR:",
     "```sh",
-    `pnpm add @async/pipeline@npm:${mirrorName}@${distTag}`,
+    `pnpm add ${installTarget(distTag)}`,
     "```",
     "",
     "Exact commit build:",
     "```sh",
-    `pnpm add @async/pipeline@npm:${mirrorName}@${version}`,
+    `pnpm add ${installTarget(version)}`,
     "```",
     "",
     `Requires GitHub Packages auth and \`@${owner}:registry=${GITHUB_REGISTRY}\` in your npm config.`

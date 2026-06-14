@@ -332,7 +332,7 @@ test("PROMISE: a closed output pipe terminates tasks and finalizes the run", { s
 });
 
 test("PROMISE: the release chain publishes GitHub Packages before npm, and previews/snapshots are wired to their triggers", async () => {
-  // README: "Stable releases publish to GitHub Packages as `@async-framework/pipeline`
+  // README: "Stable releases publish to GitHub Packages as `@async/pipeline`
   // before npm". The wiring lives in pipeline.ts; this pins it so the fallback
   // registry can never silently fall behind the primary one.
   const { default: pipeline } = await import("../pipeline.ts");

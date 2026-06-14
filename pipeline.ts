@@ -170,8 +170,8 @@ export default definePipeline({
     }),
     // GitHub Packages publishing, adapted from PatrickJS's GitHub-native npm
     // preview packages gist (see examples/github-native-npm-preview-package).
-    // The mirror is @async-framework/pipeline: GitHub Packages requires the
-    // scope to match the repo owner.
+    // The mirror uses the repository-owner scope because GitHub Packages
+    // requires the npm scope to match the repo owner.
     preview: task({
       description: "Same-repo PRs publish an immutable 0.0.0-pr.<n>.sha.<sha> preview to GitHub Packages, move the pr-<n> dist-tag, and upsert one install-instructions comment. Fork PRs skip.",
       dependsOn: ["pack"],

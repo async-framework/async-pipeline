@@ -404,24 +404,24 @@ The checked-in workflow targets Node `>= 24` on GitHub-hosted Linux (`ubuntu-lat
 
 Publishing runs through the same `pipeline.ts` that verifies the repo — the model is PatrickJS's [GitHub-native npm preview packages Gist](https://gist.github.com/PatrickJS/3fa2925713fcdf75a27a505ce2cd0d80), dogfooded (the standalone template lives in [examples/github-native-npm-preview-package](examples/github-native-npm-preview-package)):
 
-- Stable releases publish to GitHub Packages as `@async-framework/pipeline` before npm, so a stable version exists on the fallback registry even when npm publishing has an issue.
+- Stable releases publish to GitHub Packages as `@async/pipeline` before npm, so a stable version exists on the fallback registry even when npm publishing has an issue.
 - Pushes to `main` that pass the verify chain publish an immutable `0.0.0-main.sha.<sha>` snapshot to GitHub Packages and move the `main` dist-tag.
 - Same-repo pull requests publish an immutable `0.0.0-pr.<n>.sha.<sha>` preview and move the `pr-<number>` dist-tag; fork pull requests never publish previews. Previews build the PR merge commit and are stamped with the PR head SHA.
 - Republishing an existing version skips cleanly instead of failing, so re-dispatched publish jobs stay green.
 
-GitHub Packages requires the package scope to match the repo owner, so the mirror is `@async-framework/pipeline` while npm keeps `@async/pipeline`. An npm alias preserves the `@async/pipeline` import name when installing from the fallback registry:
+GitHub Packages requires the package scope to match the repo owner, so the mirror is `@async/pipeline` on `npm.pkg.github.com` while npm publishes the same package name on `registry.npmjs.org`:
 
 ```sh
 # One-time GitHub Packages auth (classic PAT with read:packages), plus
-# @async-framework:registry=https://npm.pkg.github.com in your npm config.
-npm login --scope=@async-framework --auth-type=legacy --registry=https://npm.pkg.github.com
+# @async:registry=https://npm.pkg.github.com in your npm config.
+npm login --scope=@async --auth-type=legacy --registry=https://npm.pkg.github.com
 
 # Stable fallback when npm is unavailable:
-pnpm add @async/pipeline@npm:@async-framework/pipeline@latest
+pnpm add @async/pipeline@latest
 
 # Latest main snapshot, or a PR preview:
-pnpm add @async/pipeline@npm:@async-framework/pipeline@main
-pnpm add @async/pipeline@npm:@async-framework/pipeline@pr-123
+pnpm add @async/pipeline@main
+pnpm add @async/pipeline@pr-123
 ```
 
 ## Docs

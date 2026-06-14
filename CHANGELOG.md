@@ -12,6 +12,7 @@
 
 - Wire the publish job to GitHub `release` events as well as manual dispatch, so a tagged stable release runs the GitHub Packages mirror before npm publishing and still enforces release tag/package version parity.
 - Keep the private workspace package version in lockstep with the published `@async/pipeline` package during release-drift checks.
+- Align the GitHub Packages preview/snapshot/fallback docs, preview install comments, and script defaults with the live `async/pipeline` repo owner scope (`@async/pipeline` on `npm.pkg.github.com`).
 
 ## 0.2.4 - 2026-06-13
 
@@ -77,7 +78,7 @@
 - Add an executable claim -> test coverage map: `tests/claims.json` registers documented claims with the tests that enforce them, and `scripts/check-claims.mjs` (wired into `release:check` and the self pipeline's `claims` task) fails on stale claim anchors, claims pointing at missing tests, and unregistered `PROMISE:` tests.
 - Add `github.runsOn` and `github.runsOnMatrix` job options so generated GitHub Actions jobs can target hosted runners, self-hosted label sets, or a runner matrix.
 - Add `github.permissions.issues`, `github.permissions.packages`, and `github.permissions.pullRequests` job options for generated GitHub Actions jobs that publish packages or comment on PRs. When a job grants any permission, the generator restates `contents: read` automatically (job-level permissions replace the workflow defaults). Unknown permission fields fail with `ASYNC_PIPELINE_UNKNOWN_FIELD`.
-- Dogfood GitHub Packages publishing through the self pipeline (`scripts/publish-github.mjs`, adapted from the GitHub-native npm preview packages Gist that `examples/github-native-npm-preview-package` is based on): stable releases mirror to GitHub Packages as `@async-framework/pipeline` before npm publishes, green pushes to `main` publish immutable `0.0.0-main.sha.<sha>` snapshots behind a moving `main` dist-tag, and same-repo PRs publish `0.0.0-pr.<n>.sha.<sha>` previews with a `pr-<number>` dist-tag and one upserted install-instructions PR comment. Fork PRs never publish, and republishing an existing immutable version skips cleanly. The publish script refuses to treat registry availability failures as a missing version, enforces release tag/package.json version parity on `release` events, and derives its GitHub Packages auth config from the registry URL (GHES-compatible).
+- Dogfood GitHub Packages publishing through the self pipeline (`scripts/publish-github.mjs`, adapted from the GitHub-native npm preview packages Gist that `examples/github-native-npm-preview-package` is based on): stable releases mirror to GitHub Packages under the repository-owner scope before npm publishes, green pushes to `main` publish immutable `0.0.0-main.sha.<sha>` snapshots behind a moving `main` dist-tag, and same-repo PRs publish `0.0.0-pr.<n>.sha.<sha>` previews with a `pr-<number>` dist-tag and one upserted install-instructions PR comment. Fork PRs never publish, and republishing an existing immutable version skips cleanly. The publish script refuses to treat registry availability failures as a missing version, enforces release tag/package.json version parity on `release` events, and derives its GitHub Packages auth config from the registry URL (GHES-compatible).
 - Have `doctor` warn about unreadable run directories and stale `"running"` records.
 
 ### Fixes

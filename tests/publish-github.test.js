@@ -117,8 +117,8 @@ async function runScript(mode, { event, env = {} } = {}) {
         PATH: `${dir}:${process.env.PATH}`,
         HOME: process.env.HOME,
         NPM_SHIM_LOG: logPath,
-        GITHUB_REPOSITORY: "async-framework/async-pipeline",
-        GITHUB_REPOSITORY_OWNER: "async-framework",
+        GITHUB_REPOSITORY: "async/pipeline",
+        GITHUB_REPOSITORY_OWNER: "async",
         GITHUB_API_URL: apiUrl,
         GITHUB_TOKEN: TOKEN,
         ...(eventPath ? { GITHUB_EVENT_PATH: eventPath } : {}),
@@ -145,13 +145,13 @@ function prEvent(headRepo, headSha = HEAD_SHA, number = 5) {
 }
 
 // --- release mode -------------------------------------------------------
-test("PROMISE: stable releases mirror to GitHub Packages as @async-framework/pipeline with the latest tag", async () => {
+test("PROMISE: stable releases mirror to GitHub Packages as @async/pipeline with the latest tag", async () => {
   const run = await runScript("release");
   assert.equal(run.status, 0, run.stderr);
   const publish = run.calls.find((call) => call.args[0] === "publish");
   assert.ok(publish, "expected an npm publish call");
   assert.deepEqual(publish.args, ["publish", "--tag", "latest", "--ignore-scripts", "--registry", "https://npm.pkg.github.com"]);
-  assert.equal(publish.manifest.name, "@async-framework/pipeline");
+  assert.equal(publish.manifest.name, "@async/pipeline");
   assert.equal(publish.manifest.version, manifest.version);
   assert.equal(publish.manifest.publishConfig.registry, "https://npm.pkg.github.com");
   assert.equal(publish.manifest.bin["async-pipeline"], "./dist/cli.js");
@@ -160,7 +160,7 @@ test("PROMISE: stable releases mirror to GitHub Packages as @async-framework/pip
     assert.ok(publish.files.includes(expected), `staged mirror package is missing ${expected}`);
   }
   const distTag = run.calls.find((call) => call.args[0] === "dist-tag");
-  assert.deepEqual(distTag.args.slice(0, 4), ["dist-tag", "add", `@async-framework/pipeline@${manifest.version}`, "latest"]);
+  assert.deepEqual(distTag.args.slice(0, 4), ["dist-tag", "add", `@async/pipeline@${manifest.version}`, "latest"]);
 });
 
 test("PROMISE: republishing an existing version skips publish but still moves the dist-tag", async () => {
@@ -227,20 +227,21 @@ test("PRs whose fork repo was deleted skip cleanly instead of failing", async ()
 });
 
 test("same-repo PRs publish an immutable preview version, move the pr tag, and upsert one comment", async () => {
-  const run = await runScript("pr", { event: prEvent("async-framework/async-pipeline") });
+  const run = await runScript("pr", { event: prEvent("async/pipeline") });
   assert.equal(run.status, 0, run.stderr);
   const publish = run.calls.find((call) => call.args[0] === "publish");
   assert.equal(publish.manifest.version, `0.0.0-pr.5.sha.${HEAD_SHA}`);
   assert.deepEqual(publish.args.slice(0, 3), ["publish", "--tag", "pr-5"]);
   const posted = run.api.requests.find((request) => request.method === "POST" && request.url.includes("/comments"));
   assert.ok(posted, "expected a new PR comment");
-  assert.match(posted.body, /@async\/pipeline@npm:@async-framework\/pipeline@pr-5/);
+  assert.match(posted.body, /pnpm add @async\/pipeline@pr-5/);
+  assert.match(posted.body, /@async:registry=https:\/\/npm\.pkg\.github\.com/);
   assert.match(posted.body, /0\.0\.0-pr\.5\.sha\./);
 });
 
 test("an existing marker comment is updated in place instead of duplicated", async () => {
   const run = await runScript("pr", {
-    event: prEvent("async-framework/async-pipeline"),
+    event: prEvent("async/pipeline"),
     env: { __comments: [{ id: 7, body: "<!-- github-packages-pr-preview --> old", user: { login: "github-actions[bot]" } }] }
   });
   assert.equal(run.status, 0, run.stderr);
@@ -252,7 +253,7 @@ test("an existing marker comment is updated in place instead of duplicated", asy
 
 test("a stale PR head publishes the immutable version but does not move the tag or comment", async () => {
   const run = await runScript("pr", {
-    event: prEvent("async-framework/async-pipeline"),
+    event: prEvent("async/pipeline"),
     env: { __prHeadSha: OTHER_SHA }
   });
   assert.equal(run.status, 0, run.stderr);

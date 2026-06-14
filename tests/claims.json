@@ -595,9 +595,9 @@
     {
       "id": "readme.github-packages-before-npm",
       "source": "README.md",
-      "anchor": "Stable releases publish to GitHub Packages as `@async-framework/pipeline` before npm, so a stable version exists on the fallback registry even when npm publishing has an issue.",
+      "anchor": "Stable releases publish to GitHub Packages as `@async/pipeline` before npm, so a stable version exists on the fallback registry even when npm publishing has an issue.",
       "tests": [
-        "PROMISE: stable releases mirror to GitHub Packages as @async-framework/pipeline with the latest tag",
+        "PROMISE: stable releases mirror to GitHub Packages as @async/pipeline with the latest tag",
         "PROMISE: the release chain publishes GitHub Packages before npm, and previews/snapshots are wired to their triggers"
       ]
     },

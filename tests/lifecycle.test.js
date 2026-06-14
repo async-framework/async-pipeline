@@ -79,7 +79,7 @@ function makeNpmShim(dir) {
     shim,
     [
       "#!/usr/bin/env node",
-      "const { appendFileSync, readFileSync } = require(\"node:fs\");",
+      "const { appendFileSync, readFileSync, writeFileSync } = require(\"node:fs\");",
       "const { join } = require(\"node:path\");",
       "const args = process.argv.slice(2);",
       "const record = { args, cwd: process.cwd() };",
@@ -87,6 +87,15 @@ function makeNpmShim(dir) {
       "try { record.manifest = JSON.parse(readFileSync(join(process.cwd(), \"package.json\"), \"utf8\")); } catch {}",
       "appendFileSync(process.env.NPM_SHIM_LOG, JSON.stringify(record) + \"\\n\");",
       "if (args[0] === \"view\") {",
+      "  const countPath = process.env.NPM_SHIM_VIEW_COUNT;",
+      "  const transientFailures = Number(process.env.NPM_SHIM_VIEW_FAILS_BEFORE_SUCCESS ?? 0);",
+      "  let count = 0;",
+      "  try { count = Number(readFileSync(countPath, \"utf8\")); } catch {}",
+      "  if (count < transientFailures) {",
+      "    try { writeFileSync(countPath, String(count + 1)); } catch {}",
+      "    console.error(\"npm error code E404\\nnpm error 404 No match found for version\");",
+      "    process.exit(1);",
+      "  }",
       "  const exit = Number(process.env.NPM_SHIM_VIEW_EXIT ?? 1);",
       "  if (exit === 0) console.log(process.env.NPM_SHIM_VIEW_VERSION ?? \"0.0.0\");",
       "  else console.error(process.env.NPM_SHIM_VIEW_ERROR === \"1\" ? \"npm error network ECONNRESET\" : \"npm error code E404\\nnpm error 404 Not Found\");",
@@ -108,13 +117,16 @@ async function runCli(args, { env = {}, api = {} } = {}) {
   try {
     makeNpmShim(dir);
     const logPath = join(dir, "npm-calls.jsonl");
+    const viewCountPath = join(dir, "npm-view-count.txt");
     writeFileSync(logPath, "", "utf8");
+    writeFileSync(viewCountPath, "0", "utf8");
     const child = spawn(process.execPath, [cliPath, ...args], {
       cwd: repoRoot,
       env: {
         PATH: `${dir}:${process.env.PATH}`,
         HOME: process.env.HOME,
         NPM_SHIM_LOG: logPath,
+        NPM_SHIM_VIEW_COUNT: viewCountPath,
         GITHUB_REPOSITORY: "async/pipeline",
         GITHUB_REPOSITORY_OWNER: "async",
         GITHUB_API_URL: apiUrl,
@@ -208,5 +220,22 @@ test("lifecycle CLI release doctor verifies npm, GitHub Packages, and GitHub Rel
   assert.equal(run.calls.filter((call) => call.args[0] === "view").length, 2);
   assert.equal(run.calls.some((call) => call.userconfig?.includes("_authToken")), true, "GitHub Packages check must use token auth");
   assert.equal(run.api.requests.some((request) => request.url.includes(`/releases/tags/v${manifest.version}`)), true);
+  assert.match(run.stdout, /Release doctor passed/);
+});
+
+test("lifecycle CLI release doctor retries registry propagation misses", async () => {
+  const run = await runCli(["release", "doctor", "--package", "packages/pipeline"], {
+    env: {
+      NPM_SHIM_VIEW_EXIT: "0",
+      NPM_SHIM_VIEW_FAILS_BEFORE_SUCCESS: "1",
+      NPM_SHIM_VIEW_VERSION: manifest.version,
+      ASYNC_PIPELINE_RELEASE_DOCTOR_REGISTRY_ATTEMPTS: "3",
+      ASYNC_PIPELINE_RELEASE_DOCTOR_REGISTRY_RETRY_DELAY_MS: "1"
+    }
+  });
+
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.calls.filter((call) => call.args[0] === "view").length, 3);
+  assert.match(run.stdout, /Waiting for npm to expose/);
   assert.match(run.stdout, /Release doctor passed/);
 });

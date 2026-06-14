@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.3 - 2026-06-14
+
+### Fixes
+
+- Retry release doctor registry checks so GitHub Actions releases tolerate npm and GitHub Packages propagation after a successful publish.
+
 ## 0.4.2 - 2026-06-14
 
 ### Fixes

@@ -723,6 +723,14 @@
       ]
     },
     {
+      "id": "changelog.release-doctor-registry-retry",
+      "source": "CHANGELOG.md",
+      "anchor": "Retry release doctor registry checks so GitHub Actions releases tolerate npm and GitHub Packages propagation after a successful publish.",
+      "tests": [
+        "lifecycle CLI release doctor retries registry propagation misses"
+      ]
+    },
+    {
       "id": "changelog.self-lifecycle-dogfood",
       "source": "CHANGELOG.md",
       "anchor": "Dogfood the shared lifecycle commands in the self pipeline publish chain, including release doctor verification after GitHub Packages and npm publish.",

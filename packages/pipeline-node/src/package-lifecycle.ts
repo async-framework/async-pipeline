@@ -10,6 +10,8 @@ const COMMENT_MARKER = "<!-- github-packages-pr-preview -->";
 const SHA_PATTERN = /^[0-9a-f]{40}$/;
 const NAME_PATTERN = /^@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*$/;
 const SEMVER_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
+const RELEASE_DOCTOR_REGISTRY_ATTEMPTS = 12;
+const RELEASE_DOCTOR_REGISTRY_RETRY_DELAY_MS = 5000;
 
 export type GitHubPackagePublishMode = "pr" | "main" | "release";
 
@@ -471,25 +473,40 @@ async function assertRegistryVersion(spec: string, registry: string, options: Pa
     await writeFile(userconfig, `@${scope}:registry=${GITHUB_REGISTRY}\n//${registryAuthPath}/:_authToken=${token}\n`, "utf8");
     await chmod(userconfig, 0o600);
   }
-  const view = spawnSync("npm", ["view", spec, "version", "--registry", registry], {
-    cwd: options.cwd,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-    env: {
-      ...options.env,
-      ...(userconfig ? { NPM_CONFIG_USERCONFIG: userconfig } : {}),
-      NPM_CONFIG_CACHE: options.env.NPM_CONFIG_CACHE ?? join(options.cwd, ".async", "npm-cache")
-    }
-  });
+  let lastView: SpawnSyncReturns<string> | undefined;
   try {
-    if (view.status !== 0) {
-      options.io.stderr(npmOutput(view).slice(0, 2000));
-      throw new Error(`Release doctor could not find ${spec} on ${label}.`);
+    const attempts = positiveInt(options.env.ASYNC_PIPELINE_RELEASE_DOCTOR_REGISTRY_ATTEMPTS, RELEASE_DOCTOR_REGISTRY_ATTEMPTS);
+    const delayMs = positiveInt(options.env.ASYNC_PIPELINE_RELEASE_DOCTOR_REGISTRY_RETRY_DELAY_MS, RELEASE_DOCTOR_REGISTRY_RETRY_DELAY_MS);
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      const view = spawnSync("npm", ["view", spec, "version", "--registry", registry], {
+        cwd: options.cwd,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+        env: {
+          ...options.env,
+          ...(userconfig ? { NPM_CONFIG_USERCONFIG: userconfig } : {}),
+          NPM_CONFIG_CACHE: options.env.NPM_CONFIG_CACHE ?? join(options.cwd, ".async", "npm-cache")
+        }
+      });
+      lastView = view;
+      if (view.status === 0) {
+        options.io.stdout(`OK ${label}: ${spec}\n`);
+        return;
+      }
+      if (!isMissingVersion(view)) {
+        options.io.stderr(npmOutput(view).slice(0, 2000));
+        throw new Error(`Release doctor could not verify ${spec} on ${label}.`);
+      }
+      if (attempt < attempts) {
+        options.io.stdout(`Waiting for ${label} to expose ${spec} (${attempt}/${attempts}).\n`);
+        await sleep(delayMs);
+      }
     }
+    if (lastView) options.io.stderr(npmOutput(lastView).slice(0, 2000));
+    throw new Error(`Release doctor could not find ${spec} on ${label}.`);
   } finally {
     if (cleanupDir) rmSync(cleanupDir, { force: true, recursive: true });
   }
-  options.io.stdout(`OK ${label}: ${spec}\n`);
 }
 
 async function assertGitHubRelease(repository: string, version: string, options: PackageLifecycleOptions): Promise<void> {
@@ -531,6 +548,18 @@ function assertReleaseTagMatches(manifest: PackageManifest, env: NodeJS.ProcessE
       throw new Error(`Release tag ${tagName} does not match ${manifest.name} version ${manifest.version}. Publish from a matching tag such as v${manifest.version}.`);
     }
   }
+}
+
+function positiveInt(value: string | undefined, fallback: number): number {
+  if (!value) return fallback;
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolveSleep) => {
+    setTimeout(resolveSleep, ms);
+  });
 }
 
 async function guardedApi<T>(operation: () => Promise<T>, message: string): Promise<T> {

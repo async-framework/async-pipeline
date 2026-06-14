@@ -22,13 +22,15 @@ export type JobId = string;
 export type TriggerId = string;
 export type SourceId = string;
 export type SandboxId = string;
+export type ExecutionProfileId = string;
 export type SourceType = "git" | "path";
 export type ExecutionMode = "manual" | "ci";
 export type CacheSharing = "shared" | "private" | "locked";
 export type TaskStatus = "pending" | "running" | "passed" | "failed" | "skipped" | "cached";
 export type EnvVarMap = Record<string, string>;
 export type EnvValue = string | EnvSecretRef | EnvVarRef;
-export type SandboxKind = "host" | "lima" | "docker";
+export type SandboxKind = "host" | "lima" | "docker" | "container";
+export type ContainerProvider = "auto" | "docker" | "apple-container" | "lima";
 
 export interface ShellCommand {
   kind: "shell";
@@ -133,10 +135,36 @@ export interface DockerSandboxDefinition {
   volumes?: SandboxVolume[];
 }
 
+export interface ContainerSandboxDefinition {
+  kind: "container";
+  image: string;
+  workdir?: string;
+  volumes?: SandboxVolume[];
+}
+
 export type SandboxDefinition =
   | HostSandboxDefinition
   | LimaSandboxDefinition
-  | DockerSandboxDefinition;
+  | DockerSandboxDefinition
+  | ContainerSandboxDefinition;
+
+export interface LocalExecutionProfileDefinition {
+  kind: "local";
+  sandbox?: SandboxId;
+  provider?: ContainerProvider;
+}
+
+export interface GitHubExecutionProfileDefinition {
+  kind: "github";
+  sandbox?: SandboxId;
+  provider?: ContainerProvider;
+  runsOn?: string | string[];
+  runsOnMatrix?: Array<string | string[]>;
+}
+
+export type ExecutionProfileDefinition =
+  | LocalExecutionProfileDefinition
+  | GitHubExecutionProfileDefinition;
 
 export interface CommandOutputPolicy {
   maxBytes?: number;
@@ -349,6 +377,7 @@ export interface JobDefinition {
   environment?: JobEnvironment;
   env?: Record<string, EnvValue>;
   requires?: JobRequirements;
+  execution?: ExecutionProfileId;
   github?: GitHubJobConfig;
 }
 
@@ -391,6 +420,7 @@ export interface PipelineDefinition {
   commands?: CommandPolicy;
   agents?: Record<AgentProfileId, AgentProfileDefinition>;
   sandboxes?: Record<SandboxId, SandboxDefinition>;
+  execution?: Record<ExecutionProfileId, ExecutionProfileDefinition>;
   cache?: CacheRef | CacheRegistryDefinition | CacheRegistryInput | false;
   namedInputs?: Record<string, string[]>;
   taskDefaults?: Record<string, Partial<TaskDefinition>>;
@@ -407,6 +437,7 @@ export interface NormalizedPipeline {
   commands?: CommandPolicy;
   agents: Record<AgentProfileId, AgentProfileDefinition>;
   sandboxes: Record<SandboxId, SandboxDefinition>;
+  execution: Record<ExecutionProfileId, ExecutionProfileDefinition>;
   cache: CacheRegistryDefinition;
   namedInputs: Record<string, string[]>;
   triggers: Record<TriggerId, TriggerDefinition>;
@@ -588,6 +619,33 @@ export const sandbox = {
       workdir: options.workdir,
       volumes: options.volumes ? options.volumes.map((volume) => ({ ...volume })) : undefined
     };
+  },
+  container(options: Omit<ContainerSandboxDefinition, "kind">): ContainerSandboxDefinition {
+    return {
+      kind: "container",
+      image: options.image,
+      workdir: options.workdir,
+      volumes: options.volumes ? options.volumes.map((volume) => ({ ...volume })) : undefined
+    };
+  }
+};
+
+export const execution = {
+  local(options: Omit<LocalExecutionProfileDefinition, "kind"> = {}): LocalExecutionProfileDefinition {
+    return {
+      kind: "local",
+      sandbox: options.sandbox,
+      provider: options.provider
+    };
+  },
+  github(options: Omit<GitHubExecutionProfileDefinition, "kind">): GitHubExecutionProfileDefinition {
+    return {
+      kind: "github",
+      sandbox: options.sandbox,
+      provider: options.provider,
+      runsOn: options.runsOn ? cloneRunsOnEntry(options.runsOn) : undefined,
+      runsOnMatrix: options.runsOnMatrix ? options.runsOnMatrix.map(cloneRunsOnEntry) : undefined
+    };
   }
 };
 
@@ -661,12 +719,14 @@ export const source = {
   }
 };
 
-const PIPELINE_FIELDS = new Set(["name", "env", "commands", "agents", "sandboxes", "cache", "namedInputs", "taskDefaults", "triggers", "sync", "sources", "tasks", "jobs"]);
+const PIPELINE_FIELDS = new Set(["name", "env", "commands", "agents", "sandboxes", "execution", "cache", "namedInputs", "taskDefaults", "triggers", "sync", "sources", "tasks", "jobs"]);
 const AGENT_PROFILE_FIELDS = new Set(["command", "model"]);
 const TASK_FIELDS = new Set(["description", "dependsOn", "inputs", "outputs", "cache", "retry", "timeout", "requires", "run", "steps"]);
-const JOB_FIELDS = new Set(["description", "target", "trigger", "environment", "env", "requires", "github"]);
+const JOB_FIELDS = new Set(["description", "target", "trigger", "environment", "env", "requires", "execution", "github"]);
+const EXECUTION_PROFILE_FIELDS = new Set(["kind", "sandbox", "provider", "runsOn", "runsOnMatrix"]);
 const GITHUB_JOB_FIELDS = new Set(["environment", "permissions", "runsOn", "runsOnMatrix"]);
 const GITHUB_PERMISSION_FIELDS = new Set(["contents", "idToken", "issues", "packages", "pullRequests"]);
+const CONTAINER_PROVIDERS = new Set(["auto", "docker", "apple-container", "lima"]);
 
 function rejectUnknownFields(known: Set<string>, value: object, where: string): void {
   for (const key of Object.keys(value)) {
@@ -708,6 +768,27 @@ function validateDefinitionShape(definition: PipelineDefinition): void {
   }
   for (const [id, defaults] of Object.entries(definition.taskDefaults ?? {})) {
     rejectUnknownFields(TASK_FIELDS, defaults, `taskDefaults["${id}"]`);
+  }
+  for (const [id, profile] of Object.entries(definition.execution ?? {})) {
+    rejectUnknownFields(EXECUTION_PROFILE_FIELDS, profile, `Execution profile "${id}"`);
+    if (profile.kind !== "local" && profile.kind !== "github") {
+      throw pipelineError(
+        "ASYNC_PIPELINE_EXECUTION_INVALID",
+        `Execution profile "${id}" requires kind "local" or "github".`
+      );
+    }
+    if (profile.provider !== undefined && !CONTAINER_PROVIDERS.has(profile.provider)) {
+      throw pipelineError(
+        "ASYNC_PIPELINE_EXECUTION_INVALID",
+        `Execution profile "${id}" has unsupported provider "${profile.provider}". Use auto, docker, apple-container, or lima.`
+      );
+    }
+    if (profile.kind === "local" && ("runsOn" in profile || "runsOnMatrix" in profile)) {
+      throw pipelineError(
+        "ASYNC_PIPELINE_EXECUTION_INVALID",
+        `Execution profile "${id}" is local and cannot set GitHub runner fields. Use execution.github(...) for runsOn or runsOnMatrix.`
+      );
+    }
   }
   for (const [id, jobDefinition] of Object.entries(definition.jobs ?? {})) {
     rejectUnknownFields(JOB_FIELDS, jobDefinition, `Job "${id}"`);
@@ -780,6 +861,7 @@ export function normalizePipeline(definition: PipelineDefinition): NormalizedPip
     commands: definition.commands ? normalizeCommandPolicy(definition.commands) : undefined,
     agents: normalizeAgents(definition.agents),
     sandboxes: normalizeSandboxes(definition.sandboxes),
+    execution: normalizeExecutionProfiles(definition.execution),
     cache: cacheRegistry,
     namedInputs,
     triggers: definition.triggers ?? {},
@@ -816,18 +898,41 @@ function normalizeSandboxes(definitions: Record<SandboxId, SandboxDefinition> = 
   return normalized;
 }
 
+function normalizeExecutionProfiles(definitions: Record<ExecutionProfileId, ExecutionProfileDefinition> = {}): Record<ExecutionProfileId, ExecutionProfileDefinition> {
+  const normalized: Record<ExecutionProfileId, ExecutionProfileDefinition> = {};
+  for (const [id, definition] of Object.entries(definitions)) {
+    normalized[id] = cloneExecutionProfile(definition);
+  }
+  return normalized;
+}
+
 function normalizeCommandPolicy(policy: CommandPolicy): CommandPolicy {
   return command.policy(policy);
 }
 
 function cloneSandboxDefinition(definition: SandboxDefinition): SandboxDefinition {
-  if (definition.kind === "docker") {
+  if (definition.kind === "docker" || definition.kind === "container") {
     return {
       ...definition,
       volumes: definition.volumes ? definition.volumes.map((volume) => ({ ...volume })) : undefined
     };
   }
   return { ...definition };
+}
+
+function cloneExecutionProfile(definition: ExecutionProfileDefinition): ExecutionProfileDefinition {
+  if (definition.kind === "github") {
+    return {
+      ...definition,
+      runsOn: definition.runsOn ? cloneRunsOnEntry(definition.runsOn) : undefined,
+      runsOnMatrix: definition.runsOnMatrix ? definition.runsOnMatrix.map(cloneRunsOnEntry) : undefined
+    };
+  }
+  return { ...definition };
+}
+
+function cloneRunsOnEntry(entry: string | string[]): string | string[] {
+  return Array.isArray(entry) ? [...entry] : entry;
 }
 
 function cloneCommandRule(rule: CommandRule): CommandRule {
@@ -876,7 +981,89 @@ function validateJobRunsOn(jobId: JobId, github: GitHubJobConfig | undefined): v
   }
 }
 
+function githubConfigFromExecution(profile: ExecutionProfileDefinition | undefined): GitHubJobConfig | undefined {
+  if (!profile || profile.kind !== "github") return undefined;
+  return {
+    runsOn: profile.runsOn ? cloneRunsOnEntry(profile.runsOn) : undefined,
+    runsOnMatrix: profile.runsOnMatrix ? profile.runsOnMatrix.map(cloneRunsOnEntry) : undefined
+  };
+}
+
+export function githubConfigForJob(pipeline: NormalizedPipeline, jobDefinition: NormalizedJob): GitHubJobConfig | undefined {
+  const profileGithub = githubConfigFromExecution(jobDefinition.execution ? pipeline.execution[jobDefinition.execution] : undefined);
+  if (!profileGithub && !jobDefinition.github) return undefined;
+  return {
+    ...profileGithub,
+    ...jobDefinition.github
+  };
+}
+
+function validateExecutionProfiles(pipeline: NormalizedPipeline): void {
+  for (const [id, profile] of Object.entries(pipeline.execution)) {
+    if (profile.sandbox !== undefined) {
+      const sandboxDefinition = pipeline.sandboxes[profile.sandbox];
+      if (!sandboxDefinition) {
+        throw pipelineError(
+          "ASYNC_PIPELINE_EXECUTION_UNKNOWN_SANDBOX",
+          `Execution profile "${id}" references unknown sandbox "${profile.sandbox}". Declare it under sandboxes.`
+        );
+      }
+      if (profile.provider !== undefined && sandboxDefinition.kind !== "container") {
+        throw pipelineError(
+          "ASYNC_PIPELINE_EXECUTION_PROVIDER_MISMATCH",
+          `Execution profile "${id}" sets provider "${profile.provider}", but providers only apply to sandbox.container(...) definitions.`
+        );
+      }
+    } else if (profile.provider !== undefined) {
+      throw pipelineError(
+        "ASYNC_PIPELINE_EXECUTION_PROVIDER_MISMATCH",
+        `Execution profile "${id}" sets provider "${profile.provider}" without a sandbox.`
+      );
+    }
+    if (profile.kind === "github") {
+      validateJobRunsOn(`execution:${id}`, githubConfigFromExecution(profile));
+    }
+  }
+}
+
+function validateJobExecution(pipeline: NormalizedPipeline, jobDefinition: NormalizedJob): void {
+  if (!jobDefinition.execution) return;
+  const profile = pipeline.execution[jobDefinition.execution];
+  if (!profile) {
+    throw pipelineError(
+      "ASYNC_PIPELINE_EXECUTION_UNKNOWN",
+      `Job "${jobDefinition.id}" references unknown execution profile "${jobDefinition.execution}". Declare it under execution.`
+    );
+  }
+  const effectiveGithub = githubConfigForJob(pipeline, jobDefinition);
+  validateJobRunsOn(jobDefinition.id, effectiveGithub);
+  if (profile.kind === "github" && profile.provider === "apple-container") {
+    validateAppleContainerRunsOn(jobDefinition.id, effectiveGithub);
+  }
+}
+
+function validateAppleContainerRunsOn(jobId: JobId, github: GitHubJobConfig | undefined): void {
+  const entries = github?.runsOnMatrix ?? (github?.runsOn ? [github.runsOn] : []);
+  if (entries.length === 0) {
+    throw pipelineError(
+      "ASYNC_PIPELINE_EXECUTION_RUNNER_UNSUPPORTED",
+      `Job "${jobId}" uses provider "apple-container", which requires an explicit self-hosted macOS runner label set.`
+    );
+  }
+  for (const entry of entries) {
+    const labels = Array.isArray(entry) ? entry : [entry];
+    const normalized = labels.map((label) => label.toLowerCase());
+    if (!Array.isArray(entry) || !normalized.includes("self-hosted") || !normalized.includes("macos")) {
+      throw pipelineError(
+        "ASYNC_PIPELINE_EXECUTION_RUNNER_UNSUPPORTED",
+        `Job "${jobId}" uses provider "apple-container", which requires a self-hosted macOS runner label set.`
+      );
+    }
+  }
+}
+
 export function validatePipeline(pipeline: NormalizedPipeline): void {
+  validateExecutionProfiles(pipeline);
   for (const taskDefinition of Object.values(pipeline.tasks)) {
     for (const dependency of taskDefinition.dependsOn) {
       if (!pipeline.tasks[dependency] && !isKnownExternalTaskRef(pipeline, dependency)) {
@@ -909,7 +1096,8 @@ export function validatePipeline(pipeline: NormalizedPipeline): void {
         throw new Error(`Job "${jobDefinition.id}" references missing trigger "${triggerId}".`);
       }
     }
-    validateJobRunsOn(jobDefinition.id, jobDefinition.github);
+    validateJobExecution(pipeline, jobDefinition);
+    if (!jobDefinition.execution) validateJobRunsOn(jobDefinition.id, jobDefinition.github);
   }
 
   validateSyncConfig(pipeline);

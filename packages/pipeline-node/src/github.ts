@@ -2,8 +2,8 @@ import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
-import type { EnvValue, GitHubJobConfig, JobEnvironment, JobRequirements, JobId, NormalizedJob, NormalizedPipeline, TriggerDefinition, TriggerId } from "@async/pipeline-core";
-import { pipelineError } from "@async/pipeline-core";
+import type { EnvValue, ExecutionProfileId, GitHubJobConfig, JobEnvironment, JobRequirements, JobId, NormalizedJob, NormalizedPipeline, TriggerDefinition, TriggerId } from "@async/pipeline-core";
+import { githubConfigForJob, pipelineError } from "@async/pipeline-core";
 
 export const GITHUB_WORKFLOW_PATH = ".github/workflows/async-pipeline.yml";
 export const GITHUB_LOCK_PATH = ".github/async-pipeline.lock.json";
@@ -25,7 +25,7 @@ export interface GitHubLock {
   hash: string;
   generatedAt: string;
   triggers: Record<string, unknown>;
-  jobs: Array<{ id: string; target: string[]; trigger: string[]; env: Record<string, EnvValue>; environment?: JobEnvironment; requires?: JobRequirements; github?: GitHubJobConfig; if?: string }>;
+  jobs: Array<{ id: string; target: string[]; trigger: string[]; env: Record<string, EnvValue>; environment?: JobEnvironment; requires?: JobRequirements; execution?: ExecutionProfileId; github?: GitHubJobConfig; if?: string }>;
   packageManager: string;
   buildCommand?: string;
   nodeVersion: string;
@@ -185,7 +185,8 @@ function buildRenderModel(
         env: { ...pipeline.env, ...(job.env ?? {}) },
         environment: job.environment,
         requires: job.requires,
-        github: job.github,
+        execution: job.execution,
+        github: githubConfigForJob(pipeline, job),
         if: renderGitHubJobCondition(job, pipeline.triggers)
       }))
       .sort((left, right) => left.id.localeCompare(right.id)),
@@ -340,7 +341,7 @@ function renderJob(lines: string[], model: ReturnType<typeof buildRenderModel>, 
     `        run: ${model.packageManager} async-pipeline github check`,
     "",
     "      - name: Run pipeline job",
-    `        run: ${model.packageManager} async-pipeline run ${shellWord(job.id)}`,
+    `        run: ${model.packageManager} async-pipeline run ${shellWord(job.id)}${job.execution ? ` --execution ${shellWord(job.execution)}` : ""}`,
     "        env:",
     "          CI: true"
   );

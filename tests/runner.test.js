@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { test } from "node:test";
-import { command, definePipeline, env, job, sh, task } from "../packages/pipeline-core/dist/index.js";
+import { command, definePipeline, env, execution, job, sandbox, sh, task } from "../packages/pipeline-core/dist/index.js";
 import { commandProxy, planJob, runJob, runSingleTask } from "../packages/pipeline-node/dist/runner.js";
 
 test("commandProxy mocks matching commands and records bounded redacted output", async () => {
@@ -837,6 +837,50 @@ test("docker commands forward only allowlisted env keys", async () => {
   assert.match(rendered, /-e 'CI'/);
   assert.doesNotMatch(rendered, /HOST_SECRET_TOKEN/);
   assert.doesNotMatch(rendered, /MISSING_KEY/);
+});
+
+test("container sandboxes resolve to selected providers without leaking undeclared env", async () => {
+  const { resolveExecutionContext } = await import("../packages/pipeline-node/dist/runner.js");
+  const pipeline = definePipeline({
+    name: "container-providers",
+    sandboxes: {
+      node24: sandbox.container({ image: "node:24", workdir: "/workspace" })
+    },
+    execution: {
+      docker: execution.local({ sandbox: "node24", provider: "docker" }),
+      apple: execution.local({ sandbox: "node24", provider: "apple-container" }),
+      lima: execution.local({ sandbox: "node24", provider: "lima" })
+    },
+    tasks: {
+      verify: task({ run: sh`echo verify` })
+    },
+    jobs: {
+      verify: job({ target: "verify", execution: "docker" })
+    }
+  });
+
+  const env = { HOST_SECRET_TOKEN: "leak-me", ASYNC_PIPELINE_ROOT_DIR: "/repo", CI: "true" };
+  const jobDefault = resolveExecutionContext(pipeline, { cwd: "/repo", env, id: "verify" });
+  const docker = resolveExecutionContext(pipeline, { cwd: "/repo", env, execution: "docker" });
+  const apple = resolveExecutionContext(pipeline, { cwd: "/repo", env, execution: "apple" });
+  const lima = resolveExecutionContext(pipeline, { cwd: "/repo", env, execution: "lima" });
+
+  assert.equal(jobDefault.executor.name, "docker");
+  assert.equal(docker.executor.name, "docker");
+  assert.equal(apple.executor.name, "apple-container");
+  assert.equal(lima.executor.name, "lima");
+
+  const dockerCommand = docker.executor["dockerCommand"]("echo hi", "/repo", env, ["ASYNC_PIPELINE_ROOT_DIR", "CI", "MISSING_KEY"]);
+  assert.match(dockerCommand, /-e 'ASYNC_PIPELINE_ROOT_DIR'/);
+  assert.match(dockerCommand, /-e 'CI'/);
+  assert.doesNotMatch(dockerCommand, /HOST_SECRET_TOKEN/);
+  assert.doesNotMatch(dockerCommand, /MISSING_KEY/);
+
+  const appleCommand = apple.executor["containerCommand"]("echo hi", "/repo", env, ["ASYNC_PIPELINE_ROOT_DIR", "CI", "MISSING_KEY"]);
+  assert.match(appleCommand, /-e 'ASYNC_PIPELINE_ROOT_DIR'/);
+  assert.match(appleCommand, /-e 'CI'/);
+  assert.doesNotMatch(appleCommand, /HOST_SECRET_TOKEN/);
+  assert.doesNotMatch(appleCommand, /MISSING_KEY/);
 });
 
 test("task logs are capped by ASYNC_PIPELINE_MAX_LOG_BYTES with a truncation marker", async () => {

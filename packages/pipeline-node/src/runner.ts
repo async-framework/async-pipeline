@@ -1,10 +1,10 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { availableParallelism } from "node:os";
 import { dirname, join, posix, relative } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import type { AgentStep, CandidateContext, CommandAction, CommandOutputPolicy, CommandPolicy, EnvValue, EnvVarRef, ExecutionRecord, NormalizedPipeline, NormalizedTask, ResolvedAgentStep, SandboxDefinition, SandboxId, ShellCommand, TaskContext, TaskResult, TaskRunFunction, TaskSourceContext, TaskStep } from "@async/pipeline-core";
+import type { AgentStep, CandidateContext, CommandAction, CommandOutputPolicy, CommandPolicy, ContainerProvider, EnvValue, EnvVarRef, ExecutionProfileId, ExecutionRecord, NormalizedPipeline, NormalizedTask, ResolvedAgentStep, SandboxDefinition, SandboxId, ShellCommand, TaskContext, TaskResult, TaskRunFunction, TaskSourceContext, TaskStep } from "@async/pipeline-core";
 import { isAgentStep, isResolvedAgentStep, pipelineError, sh, tasksForJob } from "@async/pipeline-core";
 import { acquireRunLock, computeTaskCacheKey, computeTaskCacheKeyDetailed, createStore, diffInputManifests, outputFilesExist, readCacheEntry, readCacheInputManifest, readTaskBaseline, resolveOutputFiles, restoreCacheOutputs, writeAgentPrompt, writeAgentTranscript, writeCacheEntry, writeCacheInputManifest, writeContextPack, writeExecution, writeTaskBaseline, writeTaskLog, type PipelineStore, type TaskContextPack, type TaskInputManifest } from "./store.js";
 import { createRunPlan, sourceContext, type ResolvedSource } from "./sources.js";
@@ -24,7 +24,7 @@ export interface RunShellOptions {
   echo?: boolean;
   redactValues?: readonly string[];
   /**
-   * Env keys safe to forward into isolated executors (docker). When omitted,
+   * Env keys safe to forward into isolated executors. When omitted,
    * isolating executors forward nothing beyond their own defaults.
    */
   forwardEnvKeys?: readonly string[];
@@ -138,6 +138,49 @@ export class DockerCommandExecutor implements CommandExecutor {
   }
 }
 
+export class AppleContainerCommandExecutor implements CommandExecutor {
+  name = "apple-container";
+
+  constructor(private readonly options: { image: string; hostCwd: string; workdir: string; volumes: DockerVolume[] }) {}
+
+  runShell(command: string, options: RunShellOptions): Promise<CommandResult> {
+    return runProcess(this.containerCommand(command, options.cwd, options.env, options.forwardEnvKeys ?? []), { cwd: this.options.hostCwd, env: options.env, echo: options.echo, timeoutMs: options.timeoutMs, label: options.task?.id, redactValues: options.redactValues });
+  }
+
+  async checkTool(tool: string): Promise<boolean> {
+    const result = await runProcess(this.containerCommand(`command -v ${shellEscape(tool)}`, this.options.hostCwd, process.env, []), {
+      cwd: this.options.hostCwd,
+      env: process.env,
+      echo: false
+    });
+    return result.code === 0;
+  }
+
+  private containerCommand(command: string, cwd: string, env: NodeJS.ProcessEnv, forwardEnvKeys: readonly string[]): string {
+    const forwarded = [...new Set(forwardEnvKeys)].filter((key) => env[key] !== undefined).sort();
+    return [
+      "container",
+      "run",
+      "--rm",
+      "-w",
+      shellEscape(this.containerCwd(cwd)),
+      ...this.options.volumes.flatMap((volume) => ["-v", shellEscape(`${volume.source}:${volume.target}${volume.readonly ? ":ro" : ""}`)]),
+      ...forwarded.flatMap((key) => ["-e", shellEscape(key)]),
+      shellEscape(this.options.image),
+      "bash",
+      "-lc",
+      shellEscape(command)
+    ].join(" ");
+  }
+
+  private containerCwd(cwd: string): string {
+    const rel = relative(this.options.hostCwd, cwd);
+    if (!rel || rel === ".") return this.options.workdir;
+    if (rel.startsWith("..")) return this.options.workdir;
+    return posix.join(this.options.workdir, rel.split(/[\\/]+/).join("/"));
+  }
+}
+
 export class LimaCommandExecutor implements CommandExecutor {
   name = "lima";
 
@@ -165,6 +208,12 @@ export class LimaCommandExecutor implements CommandExecutor {
 export function resolveExecutionContext(pipeline: NormalizedPipeline, target: RunTarget = {}): ExecutionContext {
   const cwd = target.cwd ?? process.cwd();
   const env = target.env ?? process.env;
+  const jobExecution = "id" in target && typeof target.id === "string" ? pipeline.jobs[target.id]?.execution : undefined;
+  const executionId = target.execution ?? jobExecution;
+  const profile = executionId ? pipeline.execution[executionId] : undefined;
+  if (executionId && !profile) {
+    throw new Error(`Unknown execution profile "${executionId}". Declare it under \`execution\` in the pipeline config.`);
+  }
   const base: ExecutionContext = {
     cwd,
     env,
@@ -172,15 +221,47 @@ export function resolveExecutionContext(pipeline: NormalizedPipeline, target: Ru
     executor: target.executor ?? new HostCommandExecutor(),
     commands: target.commands
   };
-  const ref = target.sandbox;
+  const ref = target.sandbox ?? profile?.sandbox;
+  const provider = target.provider ?? profile?.provider;
   if (!ref || ref === "host") return base;
   const definition = typeof ref === "string" ? pipeline.sandboxes[ref] : ref;
   if (!definition) {
     throw new Error(`Unknown sandbox "${String(ref)}". Declare it under \`sandboxes\` in the pipeline config.`);
   }
+  if (provider && definition.kind !== "container") {
+    throw new Error(`Provider "${provider}" can only be used with sandbox.container(...) definitions.`);
+  }
   if (definition.kind === "host") return base;
   if (definition.kind === "lima") {
     return { ...base, executor: new LimaCommandExecutor(definition.vm) };
+  }
+  if (definition.kind === "container") {
+    const workdir = definition.workdir ?? "/workspace";
+    const volumes = definition.volumes ?? [{ source: cwd, target: workdir }];
+    const selectedProvider = resolveContainerProvider(provider);
+    if (selectedProvider === "apple-container") {
+      return {
+        ...base,
+        executor: new AppleContainerCommandExecutor({
+          image: definition.image,
+          hostCwd: cwd,
+          workdir,
+          volumes
+        })
+      };
+    }
+    if (selectedProvider === "lima") {
+      return { ...base, executor: new LimaCommandExecutor() };
+    }
+    return {
+      ...base,
+      executor: new DockerCommandExecutor({
+        image: definition.image,
+        hostCwd: cwd,
+        workdir,
+        volumes
+      })
+    };
   }
   const workdir = definition.workdir ?? "/workspace";
   return {
@@ -192,6 +273,18 @@ export function resolveExecutionContext(pipeline: NormalizedPipeline, target: Ru
       volumes: definition.volumes ?? [{ source: cwd, target: workdir }]
     })
   };
+}
+
+function resolveContainerProvider(provider: ContainerProvider | undefined): Exclude<ContainerProvider, "auto"> {
+  if (provider && provider !== "auto") return provider;
+  if (process.platform === "darwin" && process.arch === "arm64" && toolAvailable("container")) return "apple-container";
+  if (toolAvailable("docker")) return "docker";
+  if (toolAvailable("limactl")) return "lima";
+  return "docker";
+}
+
+function toolAvailable(tool: string): boolean {
+  return spawnSync("sh", ["-lc", `command -v ${shellEscape(tool)}`], { stdio: "ignore" }).status === 0;
 }
 
 export function commandProxy(policy: CommandPolicy = { rules: [] }): PipelineCommands {
@@ -255,6 +348,8 @@ export interface RunTarget {
   executor?: CommandExecutor;
   commands?: PipelineCommands;
   sandbox?: SandboxId | SandboxDefinition;
+  provider?: ContainerProvider;
+  execution?: ExecutionProfileId;
 }
 
 export interface RunOptions extends RunTarget {

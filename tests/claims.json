@@ -129,6 +129,52 @@
       ]
     },
     {
+      "id": "api.container-sandbox",
+      "source": "docs/api.md",
+      "anchor": "`sandbox.container(...)` declares OCI-compatible container image intent; OCI is the standard container image format used by Docker, Apple container, Podman, containerd, and registries.",
+      "tests": [
+        "normalizes container sandboxes and execution profiles",
+        "container sandboxes resolve to selected providers without leaking undeclared env"
+      ]
+    },
+    {
+      "id": "api.execution-cli-selection",
+      "source": "docs/api.md",
+      "anchor": "Use `--execution <id>` to select a profile, or `--sandbox <id> --provider docker|apple-container|lima` to choose a provider for `sandbox.container(...)`.",
+      "tests": [
+        "runPipelineCli validates execution profiles before command-policy mock",
+        "container sandboxes resolve to selected providers without leaking undeclared env"
+      ]
+    },
+    {
+      "id": "readme.container-execution-selection",
+      "source": "README.md",
+      "anchor": "Isolation is opt-in: select it with `--sandbox`, `--execution`, or programmatic run options; `sandbox.container(...)` is portable OCI image intent",
+      "tests": [
+        "runPipelineCli validates execution profiles before command-policy mock",
+        "normalizes container sandboxes and execution profiles",
+        "container sandboxes resolve to selected providers without leaking undeclared env"
+      ]
+    },
+    {
+      "id": "api.job-execution-profile",
+      "source": "docs/api.md",
+      "anchor": "`job({ execution: \"...\" })` selects a profile for local CLI defaults and generated GitHub bootloaders.",
+      "tests": [
+        "normalizes container sandboxes and execution profiles",
+        "renders github execution profiles as runner defaults and CLI execution args"
+      ]
+    },
+    {
+      "id": "github.execution-profiles",
+      "source": "docs/github-actions.md",
+      "anchor": "`execution.github(...)` supplies GitHub runner defaults and generated workflows pass `--execution <id>` to the pipeline command.",
+      "tests": [
+        "renders github execution profiles as runner defaults and CLI execution args",
+        "execution profiles reject unknown sandboxes and unsupported apple container runners"
+      ]
+    },
+    {
       "id": "readme.sync-conflict",
       "source": "README.md",
       "anchor": "If a generated command exists but is not claimed by the lock, it fails with `ASYNC_PIPELINE_SYNC_CONFLICT`.",
@@ -376,6 +422,16 @@
       "anchor": "Docker sandboxes now forward only pipeline-defined env",
       "tests": [
         "docker commands forward only allowlisted env keys"
+      ]
+    },
+    {
+      "id": "changelog.container-execution-profiles",
+      "source": "CHANGELOG.md",
+      "anchor": "Container sandbox abstraction: `sandbox.container(...)` now declares portable OCI image intent, execution profiles select local or GitHub providers",
+      "tests": [
+        "normalizes container sandboxes and execution profiles",
+        "renders github execution profiles as runner defaults and CLI execution args",
+        "container sandboxes resolve to selected providers without leaking undeclared env"
       ]
     },
     {

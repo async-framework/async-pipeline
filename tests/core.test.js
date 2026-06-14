@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { buildGraph, cache, command, composePipelines, defineCache, definePipeline, dependsOn, env, fileCache, job, sh, source, task, tasksForJob, trigger, sandbox } from "../packages/pipeline-core/dist/index.js";
+import { buildGraph, cache, command, composePipelines, defineCache, definePipeline, dependsOn, env, execution, fileCache, githubConfigForJob, job, sh, source, task, tasksForJob, trigger, sandbox } from "../packages/pipeline-core/dist/index.js";
 
 test("orders tasks deterministically with dependencies before dependents", () => {
   const pipeline = definePipeline({
@@ -182,6 +182,100 @@ test("normalizes sandbox and command policy definitions", () => {
   assert.equal(pipeline.commands?.fallback?.kind, "async-pipeline.command.allow");
   assert.equal(pipeline.commands?.record, true);
   assert.equal(pipeline.commands?.output?.redactSecrets, true);
+});
+
+test("normalizes container sandboxes and execution profiles", () => {
+  const pipeline = definePipeline({
+    name: "test",
+    sandboxes: {
+      node24: sandbox.container({
+        image: "node:24",
+        workdir: "/workspace",
+        volumes: [{ source: ".", target: "/workspace" }]
+      })
+    },
+    execution: {
+      local: execution.local({ sandbox: "node24", provider: "auto" }),
+      linuxCi: execution.github({ sandbox: "node24", provider: "docker", runsOn: "ubuntu-latest" }),
+      appleCi: execution.github({ sandbox: "node24", provider: "apple-container", runsOn: ["self-hosted", "macos", "arm64", "apple-container"] })
+    },
+    tasks: {
+      verify: task({ run: sh`echo verify` })
+    },
+    jobs: {
+      verify: job({ target: "verify", execution: "linuxCi", github: { runsOn: "ubuntu-24.04" } })
+    }
+  });
+
+  assert.equal(pipeline.sandboxes.node24.kind, "container");
+  assert.equal(pipeline.execution.local.kind, "local");
+  assert.equal(pipeline.execution.linuxCi.provider, "docker");
+  assert.equal(pipeline.execution.appleCi.provider, "apple-container");
+  assert.equal(pipeline.jobs.verify.execution, "linuxCi");
+  assert.equal(githubConfigForJob(pipeline, pipeline.jobs.verify)?.runsOn, "ubuntu-24.04");
+});
+
+test("execution profiles reject unknown sandboxes and unsupported apple container runners", () => {
+  assert.throws(() => definePipeline({
+    name: "missing-sandbox",
+    execution: {
+      local: execution.local({ sandbox: "missing", provider: "docker" })
+    },
+    tasks: {
+      verify: task({ run: sh`echo verify` })
+    },
+    jobs: {
+      verify: job({ target: "verify", execution: "local" })
+    }
+  }), (error) => error.code === "ASYNC_PIPELINE_EXECUTION_UNKNOWN_SANDBOX");
+
+  assert.throws(() => definePipeline({
+    name: "bad-provider",
+    sandboxes: {
+      docker: sandbox.docker({ image: "node:24" })
+    },
+    execution: {
+      local: execution.local({ sandbox: "docker", provider: "docker" })
+    },
+    tasks: {
+      verify: task({ run: sh`echo verify` })
+    },
+    jobs: {
+      verify: job({ target: "verify", execution: "local" })
+    }
+  }), (error) => error.code === "ASYNC_PIPELINE_EXECUTION_PROVIDER_MISMATCH");
+
+  assert.throws(() => definePipeline({
+    name: "bad-apple-runner",
+    sandboxes: {
+      node24: sandbox.container({ image: "node:24" })
+    },
+    execution: {
+      appleCi: execution.github({ sandbox: "node24", provider: "apple-container", runsOn: "ubuntu-latest" })
+    },
+    tasks: {
+      verify: task({ run: sh`echo verify` })
+    },
+    jobs: {
+      verify: job({ target: "verify", execution: "appleCi" })
+    }
+  }), (error) => error.code === "ASYNC_PIPELINE_EXECUTION_RUNNER_UNSUPPORTED");
+
+  assert.throws(() => definePipeline({
+    name: "missing-apple-runner",
+    sandboxes: {
+      node24: sandbox.container({ image: "node:24" })
+    },
+    execution: {
+      appleCi: execution.github({ sandbox: "node24", provider: "apple-container" })
+    },
+    tasks: {
+      verify: task({ run: sh`echo verify` })
+    },
+    jobs: {
+      verify: job({ target: "verify", execution: "appleCi" })
+    }
+  }), (error) => error.code === "ASYNC_PIPELINE_EXECUTION_RUNNER_UNSUPPORTED");
 });
 
 test("rejects unknown cache stores and policies", () => {

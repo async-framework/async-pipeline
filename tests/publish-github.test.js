@@ -54,7 +54,15 @@ before(async () => {
   apiUrl = `http://127.0.0.1:${server.address().port}`;
 });
 
-after(() => server.close());
+after(async () => {
+  await new Promise((resolve, reject) => {
+    server.close((error) => {
+      if (error) reject(error);
+      else resolve();
+    });
+    server.closeAllConnections?.();
+  });
+});
 
 // --- mocked npm CLI -----------------------------------------------------
 function makeNpmShim(dir) {

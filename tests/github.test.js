@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { test } from "node:test";
-import { definePipeline, env, job, sh, task, trigger } from "../packages/pipeline-core/dist/index.js";
+import { definePipeline, env, execution, job, sandbox, sh, task, trigger } from "../packages/pipeline-core/dist/index.js";
 import { jobsForGitHubEvent, renderGitHubWorkflow } from "../packages/pipeline-node/dist/index.js";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -202,6 +202,49 @@ test("renders github job runner labels and runner matrices", async () => {
       "ubuntu-latest",
       ["self-hosted", "macos", "tart"]
     ]);
+  } finally {
+    rmSync(dir, { force: true, recursive: true });
+  }
+});
+
+test("renders github execution profiles as runner defaults and CLI execution args", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "async-pipeline-github-execution-"));
+  try {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ packageManager: "pnpm@10.20.0" }), "utf8");
+    const pipeline = definePipeline({
+      name: "execution-test",
+      triggers: {
+        manual: trigger.manual()
+      },
+      sandboxes: {
+        node24: sandbox.container({ image: "node:24" })
+      },
+      execution: {
+        linuxCi: execution.github({ sandbox: "node24", provider: "docker", runsOn: "ubuntu-latest" }),
+        appleCi: execution.github({ sandbox: "node24", provider: "apple-container", runsOn: ["self-hosted", "macos", "arm64", "apple-container"] })
+      },
+      tasks: {
+        linux: task({ run: sh`echo linux` }),
+        apple: task({ run: sh`echo apple` }),
+        override: task({ run: sh`echo override` })
+      },
+      jobs: {
+        linux: job({ target: "linux", trigger: ["manual"], execution: "linuxCi" }),
+        apple: job({ target: "apple", trigger: ["manual"], execution: "appleCi" }),
+        override: job({ target: "override", trigger: ["manual"], execution: "linuxCi", github: { runsOn: "ubuntu-24.04" } })
+      }
+    });
+
+    const rendered = await renderGitHubWorkflow(pipeline, { cwd: dir, configPath: join(dir, "pipeline.ts") });
+
+    assert.match(rendered.workflow, /linux:\n    name: linux\n    if: github\.event_name == 'workflow_dispatch'\n    runs-on: ubuntu-latest/);
+    assert.match(rendered.workflow, /run: pnpm async-pipeline run linux --execution linuxCi/);
+    assert.match(rendered.workflow, /apple:\n    name: apple\n    if: github\.event_name == 'workflow_dispatch'\n    runs-on: \["self-hosted","macos","arm64","apple-container"\]/);
+    assert.match(rendered.workflow, /run: pnpm async-pipeline run apple --execution appleCi/);
+    assert.match(rendered.workflow, /override:\n    name: override\n    if: github\.event_name == 'workflow_dispatch'\n    runs-on: ubuntu-24\.04/);
+    assert.equal(rendered.lock.jobs.find((entry) => entry.id === "linux")?.execution, "linuxCi");
+    assert.equal(rendered.lock.jobs.find((entry) => entry.id === "apple")?.github?.runsOn?.[3], "apple-container");
+    assert.equal(rendered.lock.jobs.find((entry) => entry.id === "override")?.github?.runsOn, "ubuntu-24.04");
   } finally {
     rmSync(dir, { force: true, recursive: true });
   }

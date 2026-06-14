@@ -373,7 +373,7 @@ The checked-in workflow targets Node `>= 24` on GitHub-hosted Linux (`ubuntu-lat
 
 - Built-in Redis or remote task cache execution. Remote stores can be declared, but no Redis dependency is shipped.
 - Automatic dependency discovery. Sources are explicit by design.
-- Automatic sandbox routing. Isolation is opt-in: select it with `--sandbox lima`, `--sandbox docker`, or `sandbox:` run options.
+- Automatic sandbox routing. Isolation is opt-in: select it with `--sandbox`, `--execution`, or programmatic run options; `sandbox.container(...)` is portable OCI image intent, while Docker, Apple container, and Lima are provider choices.
 - Deno or Ollama runtime integration. They can be declared as optional tool requirements, but they are not package dependencies.
 
 ## Workspace Layout

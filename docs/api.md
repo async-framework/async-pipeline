@@ -578,6 +578,8 @@ interface RunOptions {
   commands?: PipelineCommands;
   executor?: CommandExecutor;
   sandbox?: SandboxId | SandboxDefinition;
+  execution?: ExecutionProfileId;
+  provider?: "auto" | "docker" | "apple-container" | "lima";
 }
 
 interface CommandExecutor {
@@ -598,7 +600,7 @@ The host workspace uses the real filesystem and shell. Tests can provide a custo
 
 ## sandboxes
 
-Declare inspectable sandbox profiles in `definePipeline(...)` for opt-in isolated local runs. The default is always the host; a sandbox only applies when selected:
+Declare inspectable sandbox profiles in `definePipeline(...)` for opt-in isolated runs. The default is always the host; a sandbox only applies when selected. `sandbox.container(...)` declares OCI-compatible container image intent; OCI is the standard container image format used by Docker, Apple container, Podman, containerd, and registries.
 
 ```ts
 import { definePipeline, sandbox } from "@async/pipeline";
@@ -607,7 +609,12 @@ export default definePipeline({
   name: "app",
   sandboxes: {
     lima: sandbox.lima({ vm: "async-pipeline" }),
-    docker: sandbox.docker({ image: "node:24" })
+    docker: sandbox.docker({ image: "node:24" }),
+    node24: sandbox.container({
+      image: "node:24",
+      workdir: "/workspace",
+      volumes: [{ source: ".", target: "/workspace" }]
+    })
   },
   tasks: {},
   jobs: {}
@@ -619,7 +626,10 @@ Run a job inside a selected sandbox:
 ```sh
 async-pipeline run verify --sandbox docker
 async-pipeline run verify --sandbox lima
+async-pipeline run verify --sandbox node24 --provider docker
 ```
+
+Use `--execution <id>` to select a profile, or `--sandbox <id> --provider docker|apple-container|lima` to choose a provider for `sandbox.container(...)`.
 
 Programmatic runs select sandboxes the same way: by id from the pipeline's `sandboxes`, or with an inline definition.
 
@@ -642,6 +652,42 @@ await runJob(pipeline, {
   cwd: process.cwd()
 });
 ```
+
+## execution
+
+Execution profiles connect sandbox intent to a place where tasks run. Local profiles are for explicit local runs; GitHub profiles additionally provide generated workflow runner defaults.
+
+```ts
+import { definePipeline, execution, job, sandbox, sh, task } from "@async/pipeline";
+
+export default definePipeline({
+  name: "app",
+  sandboxes: {
+    node24: sandbox.container({ image: "node:24", workdir: "/workspace" })
+  },
+  execution: {
+    local: execution.local({ sandbox: "node24", provider: "auto" }),
+    linuxCi: execution.github({
+      sandbox: "node24",
+      provider: "docker",
+      runsOn: "ubuntu-latest"
+    }),
+    appleCi: execution.github({
+      sandbox: "node24",
+      provider: "apple-container",
+      runsOn: ["self-hosted", "macos", "arm64", "apple-container"]
+    })
+  },
+  tasks: {
+    verify: task({ run: sh`pnpm test` })
+  },
+  jobs: {
+    verify: job({ target: "verify", execution: "linuxCi" })
+  }
+});
+```
+
+`job({ execution: "..." })` selects a profile for local CLI defaults and generated GitHub bootloaders. Raw `job({ github: ... })` fields still override execution-derived GitHub runner defaults when you need direct GitHub Actions control.
 
 ## agents
 

@@ -65,6 +65,44 @@ jobs: {
 
 `runsOn` and `runsOnMatrix` are mutually exclusive; invalid or empty labels fail during pipeline normalization before workflow generation.
 
+## Execution Profiles
+
+Use `execution.github(...)` when you want a named profile to choose both the sandbox provider and the generated GitHub runner default:
+
+```ts
+import { definePipeline, execution, job, sandbox, sh, task, trigger } from "@async/pipeline";
+
+export default definePipeline({
+  name: "app",
+  triggers: {
+    pr: trigger.github({ events: ["pull_request"] })
+  },
+  sandboxes: {
+    node24: sandbox.container({ image: "node:24", workdir: "/workspace" })
+  },
+  execution: {
+    linuxCi: execution.github({
+      sandbox: "node24",
+      provider: "docker",
+      runsOn: "ubuntu-latest"
+    }),
+    appleCi: execution.github({
+      sandbox: "node24",
+      provider: "apple-container",
+      runsOn: ["self-hosted", "macos", "arm64", "apple-container"]
+    })
+  },
+  tasks: {
+    verify: task({ run: sh`pnpm test` })
+  },
+  jobs: {
+    verify: job({ target: "verify", trigger: ["pr"], execution: "linuxCi" })
+  }
+});
+```
+
+`execution.github(...)` supplies GitHub runner defaults and generated workflows pass `--execution <id>` to the pipeline command. If a job also sets `github.runsOn` or `github.runsOnMatrix`, the raw `github` field wins for runner selection while the execution profile still selects the CLI execution profile.
+
 ### macOS Runners With Tart
 
 GitHub hosts the `ubuntu-*` and `macos-*` labels (the self pipeline's `verify` job fans out across `ubuntu-latest` and `macos-latest`). A label set such as `["self-hosted", "macos", "tart"]` instead expects a runner you provide on Apple Silicon using [Tart](https://tart.run) VMs — useful when you want faster runners, controlled images, or you already own the hardware.
@@ -136,6 +174,12 @@ The generated workflow creates one GitHub Actions job per pipeline `job(...)`. E
 
 ```sh
 async-pipeline run <job-id>
+```
+
+Jobs with `job({ execution: "..." })` instead call:
+
+```sh
+async-pipeline run <job-id> --execution <id>
 ```
 
 The generated workflow still uses GitHub event conditions from pipeline triggers:

@@ -242,6 +242,56 @@ export default definePipeline({
   }
 });
 
+test("runPipelineCli validates execution profiles before command-policy mock", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "async-pipeline-cli-execution-"));
+  try {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ type: "module" }), "utf8");
+    writeFileSync(join(dir, "pipeline.js"), `
+import { command, definePipeline, execution, job, sandbox, sh, task } from ${JSON.stringify(packageUrl)};
+
+export default definePipeline({
+  name: "fixture",
+  sandboxes: {
+    node24: sandbox.container({ image: "node:24" })
+  },
+  execution: {
+    local: execution.local({ sandbox: "node24", provider: "docker" })
+  },
+  commands: command.policy({
+    rules: [
+      command.rule({
+        exact: ["async-pipeline", "run", "verify", "--execution", "local", "--provider", "docker"],
+        action: command.mock({ code: 0, stdout: "mock execution run\\n" })
+      })
+    ],
+    record: true
+  }),
+  tasks: {
+    verify: task({ run: sh\`node -e 'process.exit(9)'\` })
+  },
+  jobs: {
+    verify: job({ target: "verify" })
+  }
+});
+`, "utf8");
+
+    let stdout = "";
+    const result = await runPipelineCli({
+      args: ["run", "verify", "--execution", "local", "--provider", "docker"],
+      ...({ cwd: dir }),
+      stdout(text) {
+        stdout += text;
+      },
+      stderr() {}
+    });
+
+    assert.equal(result.code, 0);
+    assert.equal(stdout, "mock execution run\n");
+  } finally {
+    rmSync(dir, { force: true, recursive: true });
+  }
+});
+
 test("cache clear and gc maintain local pipeline state", async () => {
   const { mkdtemp, mkdir, writeFile, readdir, rm, utimes } = await import("node:fs/promises");
   const { tmpdir } = await import("node:os");

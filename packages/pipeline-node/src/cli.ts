@@ -3,7 +3,7 @@ import { existsSync, realpathSync } from "node:fs";
 import { readFile, readdir, rm } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { buildGraph, composePipelines, tasksForJob, type NormalizedPipeline } from "@async/pipeline-core";
+import { buildGraph, composePipelines, tasksForJob, type ContainerProvider, type NormalizedPipeline } from "@async/pipeline-core";
 import { runDoctor } from "./doctor.js";
 import { checkGitHubWorkflow, jobsForGitHubEvent, readGitHubEventContext, renderGitHubWorkflow, writeGitHubWorkflow } from "./github.js";
 import { loadPipeline } from "./loader.js";
@@ -33,6 +33,8 @@ interface PipelineCliContext {
   env: NodeJS.ProcessEnv;
   commands?: PipelineCommands;
   sandboxId?: string;
+  executionId?: string;
+  provider?: ContainerProvider;
   stdout(text: string): void;
   stderr(text: string): void;
 }
@@ -43,6 +45,8 @@ interface ParsedGlobalOptions {
   force: boolean;
   dryRun: boolean;
   sandboxId?: string;
+  executionId?: string;
+  provider?: ContainerProvider;
 }
 
 export async function runPipelineCli(options: PipelineCliOptions): Promise<CommandResult> {
@@ -127,6 +131,9 @@ async function runPipelineCliBuffered(options: Omit<PipelineCliOptions, "stdout"
     if (parsed.sandboxId && parsed.sandboxId !== "host" && !pipeline.sandboxes[parsed.sandboxId]) {
       throw new Error(`Unknown sandbox "${parsed.sandboxId}". Declare it under \`sandboxes\` in the pipeline config.`);
     }
+    if (parsed.executionId && !pipeline.execution[parsed.executionId]) {
+      throw new Error(`Unknown execution profile "${parsed.executionId}". Declare it under \`execution\` in the pipeline config.`);
+    }
     const commands = options.commands ?? (pipeline.commands ? commandProxy(pipeline.commands) : undefined);
 
     if (options.applyCommandPolicy && commands) {
@@ -153,6 +160,8 @@ async function runPipelineCliBuffered(options: Omit<PipelineCliOptions, "stdout"
       env: options.env,
       commands,
       sandboxId: parsed.sandboxId,
+      executionId: parsed.executionId,
+      provider: parsed.provider,
       stdout: out,
       stderr: err
     };
@@ -207,7 +216,7 @@ async function dispatchCommand(commandName: string, args: string[], context: Pip
       for (const selectedJob of jobs) {
         const graph = tasksForJob(context.pipeline, selectedJob.id);
         context.stdout(`Running ${context.pipeline.name}:${selectedJob.id} (${graph.executionOrder.join(" -> ")})\n`);
-        const result = await runJob(context.pipeline, { id: selectedJob.id, mode: "ci", cwd: context.cwd, env: context.env, commands: context.commands, sandbox: context.sandboxId, concurrency: context.concurrency });
+        const result = await runJob(context.pipeline, { id: selectedJob.id, mode: "ci", cwd: context.cwd, env: context.env, commands: context.commands, sandbox: context.sandboxId, execution: context.executionId ?? selectedJob.execution, provider: context.provider, concurrency: context.concurrency });
         reportFailedTasks(context, result.tasks);
         context.stdout(`Pipeline ${result.status}: ${result.id}\n`);
         if (result.status !== "passed") failed = true;
@@ -374,7 +383,8 @@ async function dispatchCommand(commandName: string, args: string[], context: Pip
       return printDryRun(context, format, jobId);
     }
     if (format === "text") context.stdout(`Running ${context.pipeline.name}:${jobId} (${graph.executionOrder.join(" -> ")})\n`);
-    const result = await runJob(context.pipeline, { id: jobId, mode: context.env.CI ? "ci" : "manual", cwd: context.cwd, env: context.env, commands: context.commands, sandbox: context.sandboxId, concurrency: context.concurrency, force: context.force, echo: format === "text" });
+    const selectedJob = context.pipeline.jobs[jobId];
+    const result = await runJob(context.pipeline, { id: jobId, mode: context.env.CI ? "ci" : "manual", cwd: context.cwd, env: context.env, commands: context.commands, sandbox: context.sandboxId, execution: context.executionId ?? selectedJob?.execution, provider: context.provider, concurrency: context.concurrency, force: context.force, echo: format === "text" });
     if (format === "json") {
       context.stdout(`${JSON.stringify(result, null, 2)}\n`);
     } else {
@@ -392,7 +402,7 @@ async function dispatchCommand(commandName: string, args: string[], context: Pip
     if (context.dryRun) {
       return printDryRun(context, format, undefined, taskId);
     }
-    const result = await runSingleTask(context.pipeline, taskId, { mode: context.env.CI ? "ci" : "manual", cwd: context.cwd, env: context.env, commands: context.commands, sandbox: context.sandboxId, concurrency: context.concurrency, force: context.force, echo: format === "text" });
+    const result = await runSingleTask(context.pipeline, taskId, { mode: context.env.CI ? "ci" : "manual", cwd: context.cwd, env: context.env, commands: context.commands, sandbox: context.sandboxId, execution: context.executionId, provider: context.provider, concurrency: context.concurrency, force: context.force, echo: format === "text" });
     if (format === "json") {
       context.stdout(`${JSON.stringify(result, null, 2)}\n`);
     } else {
@@ -442,7 +452,8 @@ async function printDryRun(context: PipelineCliContext, format: "text" | "json",
     };
   }
   if (!id) throw new Error("Dry run requires a job or task.");
-  const plan = await planJob(pipeline, { id, cwd: context.cwd, env: context.env, sandbox: context.sandboxId });
+  const selectedJob = jobId ? pipeline.jobs[jobId] : undefined;
+  const plan = await planJob(pipeline, { id, cwd: context.cwd, env: context.env, sandbox: context.sandboxId, execution: context.executionId ?? selectedJob?.execution, provider: context.provider });
   if (format === "json") {
     context.stdout(`${JSON.stringify(plan, null, 2)}\n`);
     return 0;
@@ -556,8 +567,8 @@ async function handleSourcesCommand(args: string[], context: PipelineCliContext)
 
 function printHelp(program: string): string {
   return `Usage:
-  ${program} run <job> [--sandbox <id>] [--concurrency <n>] [--force] [--dry-run] [--format text|json]
-  ${program} run-task <task> [--sandbox <id>] [--concurrency <n>] [--force] [--dry-run] [--format text|json]
+  ${program} run <job> [--execution <id>] [--sandbox <id>] [--provider auto|docker|apple-container|lima] [--concurrency <n>] [--force] [--dry-run] [--format text|json]
+  ${program} run-task <task> [--execution <id>] [--sandbox <id>] [--provider auto|docker|apple-container|lima] [--concurrency <n>] [--force] [--dry-run] [--format text|json]
   ${program} list
   ${program} graph --format json|dot
   ${program} explain <task> [--diff-inputs] [--format text|json]
@@ -578,7 +589,7 @@ function printHelp(program: string): string {
   ${program} sync tasks check
   ${program} github generate [--workflow <path>] [--lock <path>]
   ${program} github check [--workflow <path>] [--lock <path>]
-  ${program} github run [--job <id>] [--sandbox <id>] [--concurrency <n>]
+  ${program} github run [--job <id>] [--execution <id>] [--sandbox <id>] [--provider auto|docker|apple-container|lima] [--concurrency <n>]
   ${program} cache clear
   ${program} gc [--keep <n>] [--cache-days <n>]
   ${program} doctor\n`;
@@ -716,6 +727,8 @@ function parseGlobalOptions(args: string[]): ParsedGlobalOptions {
   const rest: string[] = [];
   let concurrency: number | undefined;
   let sandboxId: string | undefined;
+  let executionId: string | undefined;
+  let provider: ContainerProvider | undefined;
   let force = false;
   let dryRun = false;
   for (let index = 0; index < args.length; index += 1) {
@@ -735,6 +748,19 @@ function parseGlobalOptions(args: string[]): ParsedGlobalOptions {
       index += 1;
       continue;
     }
+    if (arg === "--execution") {
+      executionId = args[index + 1];
+      if (!executionId) throw new Error("Usage: async-pipeline <command> --execution <id>");
+      index += 1;
+      continue;
+    }
+    if (arg === "--provider") {
+      const raw = args[index + 1];
+      if (!raw || !isContainerProvider(raw)) throw new Error("Usage: async-pipeline <command> --provider auto|docker|apple-container|lima");
+      provider = raw;
+      index += 1;
+      continue;
+    }
     if (arg === "--concurrency") {
       const raw = args[index + 1];
       if (!raw) throw new Error("Usage: async-pipeline <command> --concurrency <n>");
@@ -744,7 +770,11 @@ function parseGlobalOptions(args: string[]): ParsedGlobalOptions {
     }
     rest.push(arg);
   }
-  return { args: rest, concurrency, sandboxId, force, dryRun };
+  return { args: rest, concurrency, sandboxId, executionId, provider, force, dryRun };
+}
+
+function isContainerProvider(value: string): value is ContainerProvider {
+  return value === "auto" || value === "docker" || value === "apple-container" || value === "lima";
 }
 
 

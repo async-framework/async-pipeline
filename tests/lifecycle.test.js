@@ -20,7 +20,9 @@ let apiState;
 function resetApi() {
   apiState = {
     requests: [],
-    branchSha: HEAD_SHA
+    branchSha: HEAD_SHA,
+    tagSha: HEAD_SHA,
+    releaseExists: true
   };
 }
 
@@ -35,7 +37,25 @@ before(async () => {
         response.end(JSON.stringify(payload));
       };
       if (request.url.includes("/branches/main")) return respond(200, { commit: { sha: apiState.branchSha } });
-      if (request.url.includes(`/releases/tags/v${manifest.version}`)) return respond(200, { tag_name: `v${manifest.version}` });
+      if (request.method === "GET" && request.url.includes(`/git/ref/tags/v${manifest.version}`)) {
+        return apiState.tagSha
+          ? respond(200, { object: { type: "commit", sha: apiState.tagSha } })
+          : respond(404, { message: "Not Found" });
+      }
+      if (request.method === "POST" && request.url.includes("/git/refs")) {
+        const payload = JSON.parse(body || "{}");
+        apiState.tagSha = payload.sha;
+        return respond(201, { ref: payload.ref, object: { type: "commit", sha: payload.sha } });
+      }
+      if (request.method === "GET" && request.url.includes(`/releases/tags/v${manifest.version}`)) {
+        return apiState.releaseExists
+          ? respond(200, { tag_name: `v${manifest.version}` })
+          : respond(404, { message: "Not Found" });
+      }
+      if (request.method === "POST" && request.url.includes("/releases")) {
+        apiState.releaseExists = true;
+        return respond(201, { ...JSON.parse(body || "{}"), html_url: "https://github.test/release" });
+      }
       respond(404, { message: "unexpected route" });
     });
   });
@@ -81,8 +101,9 @@ function makeNpmShim(dir) {
   chmodSync(shim, 0o755);
 }
 
-async function runCli(args, { env = {} } = {}) {
+async function runCli(args, { env = {}, api = {} } = {}) {
   resetApi();
+  Object.assign(apiState, api);
   const dir = mkdtempSync(join(tmpdir(), "async-pipeline-lifecycle-test-"));
   try {
     makeNpmShim(dir);
@@ -143,6 +164,36 @@ test("lifecycle CLI skips npm publish for an already published package and keeps
   assert.equal(run.calls.some((call) => call.args[0] === "publish"), false);
   assert.equal(run.calls.some((call) => call.args[0] === "access"), true);
   assert.match(run.stdout, /already published to npm/);
+});
+
+test("lifecycle CLI release ensure creates a missing tag and GitHub Release", async () => {
+  const run = await runCli(["release", "ensure", "--package", "packages/pipeline"], {
+    env: { GITHUB_SHA: HEAD_SHA },
+    api: { tagSha: undefined, releaseExists: false }
+  });
+
+  assert.equal(run.status, 0, run.stderr);
+  const createTag = run.api.requests.find((request) => request.method === "POST" && request.url.includes("/git/refs"));
+  assert.ok(createTag, "expected release ensure to create a Git ref");
+  assert.deepEqual(JSON.parse(createTag.body), { ref: `refs/tags/v${manifest.version}`, sha: HEAD_SHA });
+  const createRelease = run.api.requests.find((request) => request.method === "POST" && request.url.includes("/releases"));
+  assert.ok(createRelease, "expected release ensure to create a GitHub Release");
+  assert.equal(JSON.parse(createRelease.body).tag_name, `v${manifest.version}`);
+  assert.match(run.stdout, /Created Git tag/);
+  assert.match(run.stdout, /Created GitHub Release/);
+});
+
+test("lifecycle CLI release ensure refuses to move an existing release tag", async () => {
+  const otherSha = "b".repeat(40);
+  const run = await runCli(["release", "ensure", "--package", "packages/pipeline"], {
+    env: { GITHUB_SHA: HEAD_SHA },
+    api: { tagSha: otherSha, releaseExists: false }
+  });
+
+  assert.equal(run.status, 1);
+  assert.match(run.stderr, new RegExp(`already points to ${otherSha}`));
+  assert.equal(run.api.requests.some((request) => request.method === "POST" && request.url.includes("/git/refs")), false);
+  assert.equal(run.api.requests.some((request) => request.method === "POST" && request.url.includes("/releases")), false);
 });
 
 test("lifecycle CLI release doctor verifies npm, GitHub Packages, and GitHub Release", async () => {

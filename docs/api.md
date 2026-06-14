@@ -183,9 +183,9 @@ Triggers describe when jobs should run. Sync describes which generated files sho
 
 ## Package Lifecycle CLI
 
-Package lifecycle commands are available as `async-pipeline publish github <pr|main|release> --package <path>`, `async-pipeline publish npm --package <path>`, and `async-pipeline release doctor --package <path>`.
+Package lifecycle commands are available as `async-pipeline publish github <pr|main|release> --package <path>`, `async-pipeline publish npm --package <path>`, `async-pipeline release ensure --package <path>`, and `async-pipeline release doctor --package <path>`.
 
-`publish github` stages the package from the selected package directory, publishes PR previews, main snapshots, or stable release mirrors to GitHub Packages, and keeps the fork, stale-head, immutable-version, registry-outage, and token-redaction guards. `publish npm` publishes the selected package to npm with provenance and skips already-published versions cleanly. `release doctor` verifies npm, GitHub Packages, and GitHub Release state for the selected package after the release publish chain.
+`publish github` stages the package from the selected package directory, publishes PR previews, main snapshots, or stable release mirrors to GitHub Packages, and keeps the fork, stale-head, immutable-version, registry-outage, and token-redaction guards. `publish npm` publishes the selected package to npm with provenance and skips already-published versions cleanly. `release ensure` creates the matching `v<version>` Git tag and GitHub Release when missing, accepts existing matching release state, and refuses to move an existing tag. `release doctor` verifies npm, GitHub Packages, and GitHub Release state for the selected package after the release publish chain.
 
 ## task
 
@@ -199,7 +199,7 @@ task({
   retry: { attempts: 2, delayMs: 500 },
   timeout: "2m",
   requires: { tools: ["node", "pnpm"] },
-  run: sh`pnpm build`
+  run: sh`pnpm run build`
 })
 ```
 
@@ -207,8 +207,8 @@ Task overloads:
 
 ```ts
 task(config);
-task(config, sh`pnpm test`);
-task(config, [cache.use("file:local"), sh`pnpm test`]);
+task(config, sh`pnpm run test`);
+task(config, [cache.use("file:local"), sh`pnpm run test`]);
 ```
 
 If `config.run` is set and a second argument is also passed, `task` throws `ASYNC_PIPELINE_TASK_ARGUMENT_CONFLICT`.
@@ -241,7 +241,7 @@ Directive form is available for reusable stacks:
 task({}, [
   dependsOn("build"),
   cache.use("file:local"),
-  sh`pnpm test`
+  sh`pnpm run test`
 ])
 ```
 
@@ -267,7 +267,7 @@ definePipeline({
   name: "app",
   cache: caches,
   tasks: {
-    test: task({ cache: "file:local", run: sh`pnpm test` })
+    test: task({ cache: "file:local", run: sh`pnpm run test` })
   },
   jobs: {
     verify: job({ target: "test" })
@@ -323,7 +323,7 @@ Path sources with `prepare` require `writable: true` in v1. Git sources use warm
 
 ```ts
 task({
-  run: sh`pnpm test`
+  run: sh`pnpm run test`
 })
 ```
 
@@ -699,7 +699,7 @@ export default definePipeline({
     })
   },
   tasks: {
-    verify: task({ run: sh`pnpm test` })
+    verify: task({ run: sh`pnpm run test` })
   },
   jobs: {
     verify: job({ target: "verify", execution: "linuxCi" })
@@ -774,8 +774,8 @@ Example Claude Code / MCP host configuration:
 {
   "mcpServers": {
     "async-pipeline": {
-      "command": "npx",
-      "args": ["async-pipeline", "mcp"]
+      "command": "pnpm",
+      "args": ["dlx", "@async/pipeline", "mcp"]
     }
   }
 }

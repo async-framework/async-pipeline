@@ -342,6 +342,17 @@ test("PROMISE: the release chain publishes GitHub Packages before npm, and previ
     ["publish-github"],
     "the npm publish task must depend on the GitHub Packages mirror task"
   );
+  assert.deepEqual(
+    pipeline.tasks["publish-github"].dependsOn,
+    ["release-ensure"],
+    "the GitHub Packages mirror must wait for pipeline-owned release tag and GitHub Release creation"
+  );
+  assert.deepEqual(
+    pipeline.tasks["release-ensure"].dependsOn,
+    ["pack"],
+    "release creation must only run after package verification"
+  );
+  assert.equal(pipeline.tasks["release-ensure"].run.command, "pnpm async-pipeline release ensure --package packages/pipeline");
   assert.equal(pipeline.tasks["publish-github"].run.command, "pnpm async-pipeline publish github release --package packages/pipeline");
   assert.equal(pipeline.tasks["snapshot"].run.command, "pnpm async-pipeline publish github main --package packages/pipeline");
   assert.equal(pipeline.tasks["preview"].run.command, "pnpm async-pipeline publish github pr --package packages/pipeline");
@@ -370,6 +381,7 @@ test("PROMISE: the release chain publishes GitHub Packages before npm, and previ
     "GITHUB_TOKEN routes PR comments through the pull-requests permission, not just issues"
   );
   assert.equal(pipeline.jobs["snapshot"].github.permissions.packages, "write");
+  assert.equal(pipeline.jobs["publish"].github.permissions.contents, "write");
   assert.equal(pipeline.jobs["publish"].github.permissions.packages, "write");
 });
 

@@ -9,7 +9,7 @@ import { checkGitHubWorkflow, jobsForGitHubEvent, readGitHubEventContext, render
 import { loadPipeline } from "./loader.js";
 import { beginShutdown, commandProxy, planJob, runJob, runSingleTask, shutdownExitCode, type CommandResult, type PipelineCommands } from "./runner.js";
 import { runMcpServer } from "./mcp.js";
-import { publishGitHubPackage, publishNpmPackage, runLifecycleCli, runReleaseDoctor, type GitHubPackagePublishMode } from "./package-lifecycle.js";
+import { ensureGitHubRelease, publishGitHubPackage, publishNpmPackage, runLifecycleCli, runReleaseDoctor, type GitHubPackagePublishMode } from "./package-lifecycle.js";
 import { computeTaskInputManifest, createStore, diffInputManifests, pruneCacheEntries, readCacheInputManifest, readContextPacks, readTaskBaseline } from "./store.js";
 import { matrixForJob, readPipelineMetadata, resolveSources, sourceContext } from "./sources.js";
 import { checkTaskSync, describeTaskSync, renderTaskSync, writeTaskSync } from "./sync.js";
@@ -474,14 +474,20 @@ async function handlePublishCommand(args: string[], context: PipelineCliContext,
 
 async function handleReleaseCommand(args: string[], context: PipelineCliContext, program: string): Promise<number> {
   const subcommand = args[0];
-  const packagePath = requiredFlagValue(args, "--package", `Usage: ${program} release doctor --package <path>`);
+  const packagePath = requiredFlagValue(args, "--package", `Usage: ${program} release <ensure|doctor> --package <path>`);
+  if (subcommand === "ensure") {
+    return runLifecycleCli(
+      () => ensureGitHubRelease({ cwd: context.cwd, packagePath, env: context.env, io: context }),
+      context
+    );
+  }
   if (subcommand === "doctor") {
     return runLifecycleCli(
       () => runReleaseDoctor({ cwd: context.cwd, packagePath, env: context.env, io: context }),
       context
     );
   }
-  throw new Error(`Usage: ${program} release doctor --package <path>`);
+  throw new Error(`Usage: ${program} release <ensure|doctor> --package <path>`);
 }
 
 async function printDryRun(context: PipelineCliContext, format: "text" | "json", jobId?: string, taskId?: string): Promise<number> {
@@ -630,6 +636,7 @@ function printHelp(program: string): string {
   ${program} matrix <job> --format github
   ${program} publish github <pr|main|release> --package <path>
   ${program} publish npm --package <path>
+  ${program} release ensure --package <path>
   ${program} release doctor --package <path>
   ${program} sync list
   ${program} sync generate

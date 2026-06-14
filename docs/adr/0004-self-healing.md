@@ -24,7 +24,7 @@ Add an opt-in, per-task `onFail` hook that runs an agent step to **propose** a f
 task({
   dependsOn: ["typecheck"],
   inputs: ["default"],
-  run: sh`pnpm test`,
+  run: sh`pnpm run test`,
   onFail: agent({
     use: "claude",
     prompt: "Diagnose the failure from the context pack and produce a minimal fix as a unified diff.",

@@ -15,8 +15,8 @@ From the checkout:
 ```sh
 cd async-pipeline
 pnpm install --frozen-lockfile
-pnpm build
-pnpm async-pipeline run verify
+pnpm run build
+pnpm run pipeline:verify
 ```
 
 The repo dogfoods its own pipeline in [../pipeline.ts](../pipeline.ts). The `verify` job expands to:
@@ -82,14 +82,14 @@ export default definePipeline({
       inputs: ["source"],
       cache: "file:local",
       retry: { attempts: 2, delayMs: 500 },
-      run: sh`pnpm test`
+      run: sh`pnpm run test`
     }),
     build: task({
       dependsOn: ["test"],
       inputs: ["source"],
       outputs: ["dist/**"],
       cache: "file:local",
-      run: sh`pnpm build`
+      run: sh`pnpm run build`
     })
   },
   jobs: {
@@ -129,7 +129,7 @@ Use `.tmp/` only for generated workflow experiments. The real generated GitHub w
 Run it:
 
 ```sh
-pnpm async-pipeline run verify
+pnpm run pipeline:verify
 ```
 
 Use the explicit `async-pipeline` command in docs and CI. Short aliases and smart runner dispatch belong in `@async/run`, not this package.

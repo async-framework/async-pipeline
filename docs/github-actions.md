@@ -22,7 +22,7 @@ export default definePipeline({
     github: true
   },
   tasks: {
-    verify: task({ run: sh`pnpm test` })
+    verify: task({ run: sh`pnpm run test` })
   },
   jobs: {
     verify: job({ target: "verify", trigger: ["pr", "main"] }),
@@ -115,7 +115,7 @@ export default definePipeline({
     })
   },
   tasks: {
-    verify: task({ run: sh`pnpm test` })
+    verify: task({ run: sh`pnpm run test` })
   },
   jobs: {
     verify: job({ target: "verify", trigger: ["pr"], execution: "linuxCi" })

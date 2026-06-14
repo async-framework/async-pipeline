@@ -57,8 +57,8 @@ export default definePipeline({
   },
   tasks: {
     typecheck: task({ inputs: ["source"], cache: true, run: sh`pnpm typecheck` }),
-    test: task({ dependsOn: ["typecheck"], inputs: ["source"], cache: true, run: sh`pnpm test` }),
-    build: task({ dependsOn: ["test"], inputs: ["source"], outputs: ["dist/**"], cache: true, run: sh`pnpm build` })
+    test: task({ dependsOn: ["typecheck"], inputs: ["source"], cache: true, run: sh`pnpm run test` }),
+    build: task({ dependsOn: ["test"], inputs: ["source"], outputs: ["dist/**"], cache: true, run: sh`pnpm run build` })
   },
   jobs: {
     verify: job({ target: "build", trigger: ["pr", "main"] })

@@ -136,7 +136,7 @@ task({
   inputs: ["src/**/*.ts", "package.json", "pnpm-lock.yaml"],
   outputs: ["dist/**"],
   cache: "file:local",
-  run: sh`pnpm build`
+  run: sh`pnpm run build`
 })
 ```
 
@@ -191,7 +191,7 @@ Retry a flaky command:
 ```ts
 task({
   retry: { attempts: 3, delayMs: 1000 },
-  run: sh`pnpm test`
+  run: sh`pnpm run test`
 })
 ```
 
@@ -200,7 +200,7 @@ Set a timeout:
 ```ts
 task({
   timeout: "5m",
-  run: sh`pnpm build`
+  run: sh`pnpm run build`
 })
 ```
 

@@ -6,7 +6,7 @@ Rules for any coding agent (Codex, Claude, or other) working in this repo. They 
 
 A change is done only when ALL of these hold:
 
-1. `pnpm release:check` passes. It bootstraps the CLI (`pnpm build`), then the self pipeline runs everything with `--force`: drift, claims, docs, sync checks, build, typecheck, tests, exports, and pack. There is no parallel shell orchestration; the pipeline is the orchestrator.
+1. `pnpm run release:check` passes. It bootstraps the CLI (`pnpm run build`), then the self pipeline runs everything with `--force`: drift, claims, docs, sync checks, build, typecheck, tests, exports, and pack. There is no parallel shell orchestration; the pipeline is the orchestrator.
 2. Every behavior you claim in README.md or docs/ is enforced by a test, and the claim -> test mapping is registered in `tests/claims.json`. Product promises belong in `tests/invariants.test.js`. `scripts/check-claims.mjs` (in `release:check` and the self pipeline's `claims` task) fails on stale anchors, claims pointing at missing tests, and unregistered `PROMISE:` tests. When you add a claim, register it; when you reword one, update its anchor; when you drop one, remove the entry. The checker proves the mapping exists, not that a test is sufficient — review still owns sufficiency.
 3. Every config field is either enforced at runtime or rejected with a clear error. Fields that exist only as declared metadata must be documented as such in docs/api.md. Unknown fields fail with `ASYNC_PIPELINE_UNKNOWN_FIELD` — a typo like `timout` that is silently ignored changes behavior without warning, which is worse than a loud error.
 4. Every API or behavior change has a CHANGELOG.md entry under the version being released. Breaking changes must be labeled as breaking.

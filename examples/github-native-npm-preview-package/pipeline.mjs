@@ -32,7 +32,7 @@ export default definePipeline({
     verifyPackage: task({
       dependsOn: ["validatePackage"],
       inputs: ["package.json", "src/**/*.js", "scripts/**/*.mjs"],
-      run: sh`npm test --if-present && npm run build --if-present && npm pack --dry-run --ignore-scripts`
+      run: sh`pnpm run --if-present test && pnpm run --if-present build && npm pack --dry-run --ignore-scripts`
     }),
 
     prPreviewPlan: task({

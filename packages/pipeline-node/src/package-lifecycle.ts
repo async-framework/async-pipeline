@@ -244,6 +244,95 @@ export async function publishNpmPackage(options: PackageLifecycleOptions): Promi
   ensurePublicAccess();
 }
 
+export async function ensureGitHubRelease(options: PackageLifecycleOptions): Promise<void> {
+  const { manifest } = await readPackageContext(options.cwd, options.packagePath);
+  assertPublicPackage(manifest);
+  if (!SEMVER_PATTERN.test(manifest.version)) {
+    throw new Error(`${manifest.name} version must be simple semver for release creation. Found: ${manifest.version}`);
+  }
+
+  const repository = options.env.GITHUB_REPOSITORY ?? packageRepositoryName(manifest);
+  if (!repository) {
+    throw new Error("Set GITHUB_REPOSITORY or package.json repository so release creation can resolve GitHub state.");
+  }
+  const token = options.env.GITHUB_TOKEN;
+  if (!token) {
+    throw new Error("Set GITHUB_TOKEN with contents:write so release creation can create tags and GitHub Releases.");
+  }
+  const targetSha = options.env.GITHUB_SHA;
+  if (!targetSha || !SHA_PATTERN.test(targetSha)) {
+    throw new Error("Set GITHUB_SHA to the commit that the release tag should point at.");
+  }
+
+  const apiBase = (options.env.GITHUB_API_URL ?? "https://api.github.com").replace(/\/$/, "");
+  const tagName = `v${manifest.version}`;
+  const encodedTagName = encodeURIComponent(tagName);
+  const ghApi = async (path: string, init: RequestInit = {}, allowMissing = false): Promise<unknown | undefined> => {
+    const response = await fetch(`${apiBase}${path}`, {
+      ...init,
+      headers: {
+        authorization: `Bearer ${token}`,
+        accept: "application/vnd.github+json",
+        "content-type": "application/json",
+        "x-github-api-version": "2022-11-28",
+        ...init.headers
+      }
+    });
+    if (allowMissing && response.status === 404) return undefined;
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`GitHub API ${init.method ?? "GET"} ${path} failed with ${response.status}: ${text.slice(0, 500)}`);
+    }
+    return response.status === 204 ? null : response.json();
+  };
+
+  const resolveRefCommit = async (ref: unknown): Promise<string> => {
+    const object = asRecord(asRecord(ref).object);
+    const type = object.type;
+    const sha = object.sha;
+    if (type === "commit" && typeof sha === "string") return sha;
+    if (type === "tag" && typeof sha === "string") {
+      const tag = await ghApi(`/repos/${repository}/git/tags/${sha}`);
+      const target = asRecord(asRecord(tag).object);
+      if (target.type === "commit" && typeof target.sha === "string") return target.sha;
+    }
+    throw new Error(`Release tag ${tagName} points to an unsupported Git object.`);
+  };
+
+  const existingRef = await ghApi(`/repos/${repository}/git/ref/tags/${encodedTagName}`, {}, true);
+  if (existingRef) {
+    const existingSha = await resolveRefCommit(existingRef);
+    if (existingSha !== targetSha) {
+      throw new Error(`Release tag ${tagName} already points to ${existingSha}; refusing to move it to ${targetSha}.`);
+    }
+    options.io.stdout(`OK Git tag: ${tagName} -> ${targetSha}\n`);
+  } else {
+    await ghApi(`/repos/${repository}/git/refs`, {
+      method: "POST",
+      body: JSON.stringify({ ref: `refs/tags/${tagName}`, sha: targetSha })
+    });
+    options.io.stdout(`Created Git tag ${tagName} -> ${targetSha}.\n`);
+  }
+
+  const existingRelease = await ghApi(`/repos/${repository}/releases/tags/${encodedTagName}`, {}, true);
+  if (existingRelease) {
+    options.io.stdout(`OK GitHub Release: ${repository}@${tagName}\n`);
+  } else {
+    await ghApi(`/repos/${repository}/releases`, {
+      method: "POST",
+      body: JSON.stringify({
+        tag_name: tagName,
+        target_commitish: targetSha,
+        name: `${manifest.name} ${tagName}`,
+        body: `Release ${manifest.name}@${manifest.version}.`,
+        draft: false,
+        prerelease: manifest.version.includes("-")
+      })
+    });
+    options.io.stdout(`Created GitHub Release ${repository}@${tagName}.\n`);
+  }
+}
+
 export async function runReleaseDoctor(options: PackageLifecycleOptions): Promise<void> {
   const { manifest } = await readPackageContext(options.cwd, options.packagePath);
   assertPublicPackage(manifest);

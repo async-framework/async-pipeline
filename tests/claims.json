@@ -665,11 +665,32 @@
     {
       "id": "api.package-lifecycle-cli",
       "source": "docs/api.md",
-      "anchor": "Package lifecycle commands are available as `async-pipeline publish github <pr|main|release> --package <path>`, `async-pipeline publish npm --package <path>`, and `async-pipeline release doctor --package <path>`.",
+      "anchor": "Package lifecycle commands are available as `async-pipeline publish github <pr|main|release> --package <path>`, `async-pipeline publish npm --package <path>`, `async-pipeline release ensure --package <path>`, and `async-pipeline release doctor --package <path>`.",
       "tests": [
         "lifecycle CLI publishes GitHub Packages snapshots from a package path",
         "lifecycle CLI skips npm publish for an already published package and keeps public access",
+        "lifecycle CLI release ensure creates a missing tag and GitHub Release",
         "lifecycle CLI release doctor verifies npm, GitHub Packages, and GitHub Release"
+      ]
+    },
+    {
+      "id": "readme.release-ensure-before-publish",
+      "source": "README.md",
+      "anchor": "Stable release jobs create or verify the matching `v<version>` Git tag and GitHub Release before package publishing, and refuse to move an existing tag.",
+      "tests": [
+        "lifecycle CLI release ensure creates a missing tag and GitHub Release",
+        "lifecycle CLI release ensure refuses to move an existing release tag",
+        "PROMISE: the release chain publishes GitHub Packages before npm, and previews/snapshots are wired to their triggers"
+      ]
+    },
+    {
+      "id": "api.release-ensure-lifecycle",
+      "source": "docs/api.md",
+      "anchor": "`release ensure` creates the matching `v<version>` Git tag and GitHub Release when missing, accepts existing matching release state, and refuses to move an existing tag.",
+      "tests": [
+        "lifecycle CLI release ensure creates a missing tag and GitHub Release",
+        "lifecycle CLI release ensure refuses to move an existing release tag",
+        "PROMISE: the release chain publishes GitHub Packages before npm, and previews/snapshots are wired to their triggers"
       ]
     },
     {
@@ -689,6 +710,16 @@
         "lifecycle CLI publishes GitHub Packages snapshots from a package path",
         "lifecycle CLI skips npm publish for an already published package and keeps public access",
         "lifecycle CLI release doctor verifies npm, GitHub Packages, and GitHub Release"
+      ]
+    },
+    {
+      "id": "changelog.release-ensure-lifecycle",
+      "source": "CHANGELOG.md",
+      "anchor": "Add `async-pipeline release ensure --package <path>` so generated GitHub Actions can create or verify the release tag and GitHub Release before package publishing, without local tag or release commands.",
+      "tests": [
+        "lifecycle CLI release ensure creates a missing tag and GitHub Release",
+        "lifecycle CLI release ensure refuses to move an existing release tag",
+        "PROMISE: the release chain publishes GitHub Packages before npm, and previews/snapshots are wired to their triggers"
       ]
     },
     {

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.2 - 2026-06-14
+
+### Fixes
+
+- Align quickstart, examples, and MCP host docs with the pnpm task standard: use `pnpm run <task>` for package scripts and `pnpm dlx` where a one-off CLI invocation is intended.
+- Fix the GitHub-native preview package example so optional pnpm scripts use `pnpm run --if-present <task>` without forwarding `--if-present` into the script command.
+- Add `async-pipeline release ensure --package <path>` so generated GitHub Actions can create or verify the release tag and GitHub Release before package publishing, without local tag or release commands.
+
 ## 0.4.1 - 2026-06-14
 
 ### Features
@@ -136,7 +144,7 @@
 - Build the docs site through an explicit GitHub Pages workflow (`.github/workflows/pages.yml`): docs stay plain markdown that renders on GitHub, and Jekyll runs as a CI build step instead of branch magic.
 - Check docs drift in the pipeline: `scripts/check-docs.mjs` (the self pipeline's `docs` task, wired into `release:check`) fails on broken relative links or anchors in README.md and docs/.
 - Move internal agent goal state from `docs/goals/` to `goals/` so the published docs tree is only documentation.
-- Dogfood release verification end to end: `release:check` is now `pnpm build && async-pipeline run verify --force`, with a `sync-check` task gating `pack` — the shell chain that duplicated the pipeline's orchestration is gone.
+- Dogfood release verification end to end: `release:check` is now `pnpm run build && async-pipeline run verify --force`, with a `sync-check` task gating `pack` — the shell chain that duplicated the pipeline's orchestration is gone.
 
 ## 0.1.5 - 2026-06-10
 

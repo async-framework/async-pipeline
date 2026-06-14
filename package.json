@@ -2,7 +2,7 @@
   "name": "async-pipeline-workspace",
   "private": true,
   "license": "MIT",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "type": "module",
   "packageManager": "pnpm@10.20.0",
   "engines": {
@@ -28,10 +28,11 @@
     "pipeline:publish:github:release": "async-pipeline publish github release --package packages/pipeline",
     "pipeline:publish:npm": "async-pipeline publish npm --package packages/pipeline",
     "pipeline:release:doctor": "async-pipeline release doctor --package packages/pipeline",
+    "pipeline:release:ensure": "async-pipeline release ensure --package packages/pipeline",
     "pipeline:snapshot": "async-pipeline run snapshot",
     "pipeline:sync:check": "async-pipeline sync check",
     "pipeline:verify": "async-pipeline run verify",
-    "release:check": "pnpm build && pnpm async-pipeline run verify --force",
+    "release:check": "pnpm run build && pnpm run pipeline:verify -- --force",
     "test": "node --test tests/*.test.js",
     "typecheck": "pnpm -r --sort typecheck"
   },

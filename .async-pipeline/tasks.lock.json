@@ -74,6 +74,10 @@
           "value": "async-pipeline release doctor --package packages/pipeline"
         },
         {
+          "name": "pipeline:release:ensure",
+          "value": "async-pipeline release ensure --package packages/pipeline"
+        },
+        {
           "name": "pipeline:sync:check",
           "value": "async-pipeline sync check"
         }
@@ -138,10 +142,14 @@
       "value": "async-pipeline release doctor --package packages/pipeline"
     },
     {
+      "name": "pipeline:release:ensure",
+      "value": "async-pipeline release ensure --package packages/pipeline"
+    },
+    {
       "name": "pipeline:sync:check",
       "value": "async-pipeline sync check"
     }
   ],
-  "hash": "sha256:2dfe6f265e4bc767e49217b5d33d7f0a04e772815612ac83a84f7d010b2e87a2",
-  "generatedAt": "2026-06-14T08:22:26.749Z"
+  "hash": "sha256:7719187f502533330bcdae1dede6bfee1b598f044a09071d3d4725a5f71a3036",
+  "generatedAt": "2026-06-14T10:18:14.381Z"
 }

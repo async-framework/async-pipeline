@@ -38,6 +38,7 @@ export default definePipeline({
         "publish:github:pr": "publish github pr --package packages/pipeline",
         "publish:github:release": "publish github release --package packages/pipeline",
         "publish:npm": "publish npm --package packages/pipeline",
+        "release:ensure": "release ensure --package packages/pipeline",
         "release:doctor": "release doctor --package packages/pipeline",
         "sync:check": "sync check"
       }
@@ -79,7 +80,7 @@ export default definePipeline({
         "scripts/check-docs.mjs"
       ],
       cache: true,
-      run: sh`pnpm docs:check`
+      run: sh`pnpm run docs:check`
     }),
     "sync-check": task({
       description: "All synced surfaces (generated workflow, lock, package scripts) still match pipeline.ts.",
@@ -173,7 +174,7 @@ export default definePipeline({
       inputs: ["production"],
       outputs: ["packages/*/dist/**"],
       cache: true,
-      run: sh`pnpm build`
+      run: sh`pnpm run build`
     }),
     typecheck: task({
       dependsOn: ["build"],
@@ -185,7 +186,7 @@ export default definePipeline({
       dependsOn: ["typecheck"],
       inputs: ["default"],
       cache: true,
-      run: sh`pnpm test`
+      run: sh`pnpm run test`
     }),
     examples: task({
       description: "Every committed example runs green from its own directory through the public CLI, and its committed sync artifacts are current.",
@@ -227,10 +228,17 @@ export default definePipeline({
     }),
     "publish-github": task({
       description: "Stable mirror to GitHub Packages (latest tag). Runs before the npm publish so a stable version always exists on GitHub Packages even when npm has an issue.",
-      dependsOn: ["pack"],
+      dependsOn: ["release-ensure"],
       inputs: ["production", "package.json", "packages/*/package.json"],
       cache: false,
       run: sh`pnpm async-pipeline publish github release --package packages/pipeline`
+    }),
+    "release-ensure": task({
+      description: "Create or verify the release tag and GitHub Release before package publishing.",
+      dependsOn: ["pack"],
+      inputs: ["production", "package.json", "packages/*/package.json"],
+      cache: false,
+      run: sh`pnpm async-pipeline release ensure --package packages/pipeline`
     }),
     publish: task({
       // GitHub Packages first, then npm: the fallback registry is never
@@ -307,6 +315,7 @@ export default definePipeline({
       },
       github: {
         permissions: {
+          contents: "write",
           packages: "write"
         }
       }

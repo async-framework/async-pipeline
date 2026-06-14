@@ -152,7 +152,7 @@ test("renders github pages build and deploy jobs", async () => {
         manual: trigger.manual()
       },
       tasks: {
-        docs: task({ run: sh`pnpm docs:check` })
+        docs: task({ run: sh`pnpm run docs:check` })
       },
       jobs: {
         pages: job({

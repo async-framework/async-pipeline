@@ -58,9 +58,9 @@ The generated scripts work from inside the packages because the CLI finds `pipel
 
 ```sh
 cd packages/app
-npm run pipeline:verify    # runs the workspace-root verify job
+pnpm run pipeline:verify   # runs the workspace-root verify job
 ```
 
 ## Why Select Packages At All?
 
-The root pipeline stays the single source of truth, but people working inside `packages/app` get a local `npm run pipeline:verify` without knowing where the pipeline lives. Packages that should not advertise pipeline entrypoints — internal tooling, fixtures, generated code — simply are not listed as targets, and `sync check` will never complain about them.
+The root pipeline stays the single source of truth, but people working inside `packages/app` get a local `pnpm run pipeline:verify` without knowing where the pipeline lives. Packages that should not advertise pipeline entrypoints — internal tooling, fixtures, generated code — simply are not listed as targets, and `sync check` will never complain about them.

@@ -38,8 +38,8 @@ Try the repo's own pipeline (requires Node >= 24 on macOS or Linux; `pipeline.ts
 git clone https://github.com/async/pipeline.git
 cd async-pipeline
 pnpm install --frozen-lockfile
-pnpm build
-pnpm async-pipeline run verify
+pnpm run build
+pnpm run pipeline:verify
 ```
 
 Inspect the run:
@@ -50,7 +50,7 @@ cat .async/runs/<run-id>/summary.md
 cat .async/runs/<run-id>/execution.json
 ```
 
-The self pipeline lives in [pipeline.ts](pipeline.ts). It runs `build`, `typecheck`, `test`, and `pack` through the `verify` job, and it declares the GitHub triggers used to generate [.github/workflows/async-pipeline.yml](.github/workflows/async-pipeline.yml). The initial `pnpm build` in the quickstart bootstraps the built CLI that loads `pipeline.ts`; after that, the pipeline owns the task order.
+The self pipeline lives in [pipeline.ts](pipeline.ts). It runs `build`, `typecheck`, `test`, and `pack` through the `verify` job, and it declares the GitHub triggers used to generate [.github/workflows/async-pipeline.yml](.github/workflows/async-pipeline.yml). The initial `pnpm run build` in the quickstart bootstraps the built CLI that loads `pipeline.ts`; after that, the pipeline owns the task order.
 
 ## Examples
 
@@ -100,20 +100,20 @@ export default definePipeline({
     typecheck: task({
       inputs: ["source"],
       cache: "file:local",
-      run: sh`pnpm typecheck`
+      run: sh`pnpm run typecheck`
     }),
     test: task({
       dependsOn: ["typecheck"],
       inputs: ["source"],
       cache: "file:local",
-      run: sh`pnpm test`
+      run: sh`pnpm run test`
     }),
     build: task({
       dependsOn: ["test"],
       inputs: ["source"],
       outputs: ["dist/**"],
       cache: "file:local",
-      run: sh`pnpm build`
+      run: sh`pnpm run build`
     })
   },
   jobs: {
@@ -187,7 +187,7 @@ Keep the generated GitHub workflow and lock committed:
 Run the same graph locally:
 
 ```sh
-pnpm async-pipeline run verify
+pnpm run pipeline:verify
 ```
 
 ## Useful Commands
@@ -306,7 +306,7 @@ Task sync records ownership in `.async-pipeline/tasks.lock.json`. `sync tasks ge
 The default pipeline cache registry includes `file` and `memory`. `cache: true` uses the pipeline default, and explicit refs make task behavior easy to read:
 
 ```ts
-task({ cache: "file:local", run: sh`pnpm test` })
+task({ cache: "file:local", run: sh`pnpm run test` })
 ```
 
 Cache keys are derived from the task config, resolved commands, declared inputs, direct dependency cache fingerprints, and portable source/candidate metadata. Input resolution ignores `.git/`, `.async/`, and `node_modules/` by default, and a task's declared `outputs` are excluded from that task's inputs so build artifacts do not dirty their own cache entry.
@@ -329,7 +329,7 @@ export default definePipeline({
   name: "app",
   cache: caches,
   tasks: {
-    test: task({ cache: "file:local", run: sh`pnpm test` })
+    test: task({ cache: "file:local", run: sh`pnpm run test` })
   },
   jobs: {
     verify: job({ target: "test" })
@@ -404,6 +404,7 @@ The checked-in workflow targets Node `>= 24` on GitHub-hosted Linux (`ubuntu-lat
 Publishing runs through the same `pipeline.ts` that verifies the repo — the model is PatrickJS's [GitHub-native npm preview packages Gist](https://gist.github.com/PatrickJS/3fa2925713fcdf75a27a505ce2cd0d80), dogfooded (the standalone template lives in [examples/github-native-npm-preview-package](examples/github-native-npm-preview-package)):
 
 - Stable releases publish to GitHub Packages as `@async/pipeline` before npm, so a stable version exists on the fallback registry even when npm publishing has an issue.
+- Stable release jobs create or verify the matching `v<version>` Git tag and GitHub Release before package publishing, and refuse to move an existing tag.
 - Pushes to `main` that pass the verify chain publish an immutable `0.0.0-main.sha.<sha>` snapshot to GitHub Packages and move the `main` dist-tag.
 - Same-repo pull requests publish an immutable `0.0.0-pr.<n>.sha.<sha>` preview and move the `pr-<number>` dist-tag; fork pull requests never publish previews. Previews build the PR merge commit and are stamped with the PR head SHA.
 - Republishing an existing version skips cleanly instead of failing, so re-dispatched publish jobs stay green.

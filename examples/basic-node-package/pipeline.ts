@@ -27,14 +27,14 @@ export default definePipeline({
     typecheck: task({
       inputs: ["source"],
       cache: "file:local",
-      run: sh`npm run typecheck`
+      run: sh`pnpm run typecheck`
     }),
 
     test: task({
       dependsOn: ["typecheck"],
       inputs: ["source"],
       cache: "file:local",
-      run: sh`npm test`
+      run: sh`pnpm run test`
     }),
 
     build: task({
@@ -42,7 +42,7 @@ export default definePipeline({
       inputs: ["source"],
       outputs: ["dist/**"],
       cache: "file:local",
-      run: sh`npm run build`
+      run: sh`pnpm run build`
     }),
 
     pack: task({

@@ -19,7 +19,7 @@ task({...})    the boundary that owns ids, dependsOn, cache, inspection
 
 ```sh
 pnpm install
-npm run checkout
+pnpm run checkout
 ```
 
 ```txt
@@ -35,7 +35,7 @@ inspect: task "handleCheckout" flow kinds: middleware, series, parallel, branch
 Three things to notice: middleware sees `next()`'s return value and decorates it (`elapsedMs`); after a `parallel([...])` group, `ctx.output` is the array of its results in declaration order, which the `branch` predicate reads; and a rejected order is still `status: "passed"` — the workflow decided, it did not fail. Thrown errors are the failure path, recorded as structured nodes with codes like `ASYNC_PIPELINE_RUNTIME_TASK_FAILED`.
 
 ```sh
-npm run worker
+pnpm run worker
 ```
 
 ```txt

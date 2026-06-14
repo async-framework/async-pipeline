@@ -34,7 +34,7 @@ export default definePipeline({
       dependsOn: ["typecheck"],
       inputs: ["src/**/*.ts", "tests/**/*.ts", "package.json"],
       cache: "file:local",
-      run: sh`pnpm test`
+      run: sh`pnpm run test`
     })
   },
   jobs: {

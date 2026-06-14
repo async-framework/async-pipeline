@@ -27,7 +27,7 @@ import { definePipeline, job, sh, task } from "@async/pipeline";
 export default definePipeline({
   name: "app",
   tasks: {
-    build: task({ run: sh`pnpm build` })
+    build: task({ run: sh`pnpm run build` })
   },
   jobs: {
     verify: job({ target: "build" })
@@ -59,7 +59,7 @@ Tasks name their dependencies with `dependsOn`:
 ```ts
 task({
   dependsOn: ["typecheck"],
-  run: sh`pnpm test`
+  run: sh`pnpm run test`
 })
 ```
 
@@ -119,7 +119,7 @@ If a cached file task declares outputs, the runner snapshots those output files 
 Cache refs are normalized during definition:
 
 ```ts
-task({ cache: "file:local", run: sh`pnpm test` })
+task({ cache: "file:local", run: sh`pnpm run test` })
 ```
 
 `memory` and `file` are registered by default. Remote stores can be declared as metadata for future runtimes without adding mandatory package dependencies.
@@ -190,7 +190,7 @@ export default definePipeline({
     docker: sandbox.docker({ image: "node:24" })
   },
   tasks: {
-    verify: task({ run: sh`pnpm test` })
+    verify: task({ run: sh`pnpm run test` })
   },
   jobs: {
     verify: job({ target: "verify" })

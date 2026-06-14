@@ -4,7 +4,7 @@
 // 1. Every exports subpath's types and default targets exist on disk.
 // 2. Every bin target exists.
 // 3. license, files ("dist"), and the LICENSE file are present.
-// Run after `pnpm build`; wired into release:check and the self pipeline.
+// Run after `pnpm run build`; wired into release:check and the self pipeline.
 import { access, readFile } from "node:fs/promises";
 import { join } from "node:path";
 

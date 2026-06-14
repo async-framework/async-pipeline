@@ -9,6 +9,13 @@ on:
     branches:
       - "main"
   workflow_dispatch:
+    inputs:
+      job:
+        description: "Pipeline job to run"
+        required: true
+        type: choice
+        options:
+          - "verifyImpact"
 
 permissions:
   contents: read
@@ -16,7 +23,7 @@ permissions:
 jobs:
   verifyImpact:
     name: verifyImpact
-    if: (github.event_name == 'pull_request') || (github.event_name == 'push' && (github.ref == 'refs/heads/main')) || (github.event_name == 'workflow_dispatch')
+    if: (github.event_name == 'pull_request') || (github.event_name == 'push' && (github.ref == 'refs/heads/main')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'verifyImpact')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

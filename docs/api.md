@@ -181,6 +181,12 @@ sync      = generated files to keep current
 
 Triggers describe when jobs should run. Sync describes which generated files should be kept current.
 
+## Package Lifecycle CLI
+
+Package lifecycle commands are available as `async-pipeline publish github <pr|main|release> --package <path>`, `async-pipeline publish npm --package <path>`, and `async-pipeline release doctor --package <path>`.
+
+`publish github` stages the package from the selected package directory, publishes PR previews, main snapshots, or stable release mirrors to GitHub Packages, and keeps the fork, stale-head, immutable-version, registry-outage, and token-redaction guards. `publish npm` publishes the selected package to npm with provenance and skips already-published versions cleanly. `release doctor` verifies npm, GitHub Packages, and GitHub Release state for the selected package after the release publish chain.
+
 ## task
 
 ```ts

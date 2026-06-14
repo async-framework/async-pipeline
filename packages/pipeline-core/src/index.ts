@@ -407,8 +407,26 @@ export interface NormalizedJob extends Omit<JobDefinition, "target" | "trigger">
 
 export type GitHubPermission = "read" | "write" | "none";
 
+export type GitHubPagesBuild =
+  | {
+    kind: "jekyll";
+    source: string;
+    destination?: string;
+  }
+  | {
+    kind: "static";
+    path: string;
+  };
+
+export interface GitHubPagesConfig {
+  build: GitHubPagesBuild;
+  artifactName?: string;
+  environment?: JobEnvironment;
+}
+
 export interface GitHubJobConfig {
   environment?: string;
+  pages?: GitHubPagesConfig;
   permissions?: {
     contents?: GitHubPermission;
     idToken?: "write" | "none";
@@ -772,7 +790,10 @@ const AGENT_PROFILE_FIELDS = new Set(["command", "model"]);
 const TASK_FIELDS = new Set(["description", "dependsOn", "inputs", "outputs", "cache", "retry", "timeout", "requires", "run", "steps"]);
 const JOB_FIELDS = new Set(["description", "target", "trigger", "environment", "env", "requires", "execution", "github"]);
 const EXECUTION_PROFILE_FIELDS = new Set(["kind", "sandbox", "provider", "runsOn", "runsOnMatrix"]);
-const GITHUB_JOB_FIELDS = new Set(["environment", "permissions", "runsOn", "runsOnMatrix"]);
+const GITHUB_JOB_FIELDS = new Set(["environment", "pages", "permissions", "runsOn", "runsOnMatrix"]);
+const GITHUB_PAGES_FIELDS = new Set(["artifactName", "build", "environment"]);
+const GITHUB_PAGES_JEKYLL_BUILD_FIELDS = new Set(["destination", "kind", "source"]);
+const GITHUB_PAGES_STATIC_BUILD_FIELDS = new Set(["kind", "path"]);
 const GITHUB_PERMISSION_FIELDS = new Set(["contents", "idToken", "issues", "packages", "pullRequests"]);
 const CONTAINER_PROVIDERS = new Set(["auto", "docker", "apple-container", "lima"]);
 const SECTION_KINDS = {
@@ -854,6 +875,9 @@ function validateDefinitionShape(definition: PipelineDefinition): void {
     rejectUnknownFields(JOB_FIELDS, jobDefinition, `Job "${id}"`);
     if (jobDefinition.github) {
       rejectUnknownFields(GITHUB_JOB_FIELDS, jobDefinition.github, `Job "${id}" github config`);
+      if (jobDefinition.github.pages) {
+        validateGitHubPagesConfig(id, jobDefinition.github.pages);
+      }
       if (jobDefinition.github.permissions) {
         rejectUnknownFields(GITHUB_PERMISSION_FIELDS, jobDefinition.github.permissions, `Job "${id}" github permissions`);
       }
@@ -1165,6 +1189,70 @@ function validateJobRunsOn(jobId: JobId, github: GitHubJobConfig | undefined): v
     for (const entry of github.runsOnMatrix) {
       validateRunsOnEntry(jobId, entry, "runsOnMatrix");
     }
+  }
+  if (github.pages && github.runsOnMatrix !== undefined) {
+    throw pipelineError(
+      "ASYNC_PIPELINE_GITHUB_PAGES_INVALID",
+      `Job "${jobId}" cannot combine github.pages with github.runsOnMatrix; a Pages deploy expects one uploaded artifact.`
+    );
+  }
+}
+
+function validateGitHubPagesConfig(jobId: JobId, pages: GitHubPagesConfig): void {
+  if (!isObjectRecord(pages)) {
+    throw pipelineError(
+      "ASYNC_PIPELINE_GITHUB_PAGES_INVALID",
+      `Job "${jobId}" github.pages must be an object with a build config.`
+    );
+  }
+  rejectUnknownFields(GITHUB_PAGES_FIELDS, pages, `Job "${jobId}" github.pages`);
+  if (!isObjectRecord(pages.build)) {
+    throw pipelineError(
+      "ASYNC_PIPELINE_GITHUB_PAGES_INVALID",
+      `Job "${jobId}" github.pages.build must be an object.`
+    );
+  }
+  if (pages.build.kind === "jekyll") {
+    rejectUnknownFields(GITHUB_PAGES_JEKYLL_BUILD_FIELDS, pages.build, `Job "${jobId}" github.pages.build`);
+    validateNonEmptyString(jobId, "github.pages.build.source", pages.build.source);
+    if (pages.build.destination !== undefined) {
+      validateNonEmptyString(jobId, "github.pages.build.destination", pages.build.destination);
+    }
+  } else if (pages.build.kind === "static") {
+    rejectUnknownFields(GITHUB_PAGES_STATIC_BUILD_FIELDS, pages.build, `Job "${jobId}" github.pages.build`);
+    validateNonEmptyString(jobId, "github.pages.build.path", pages.build.path);
+  } else {
+    throw pipelineError(
+      "ASYNC_PIPELINE_GITHUB_PAGES_INVALID",
+      `Job "${jobId}" github.pages.build.kind must be "jekyll" or "static".`
+    );
+  }
+  if (pages.artifactName !== undefined) {
+    validateNonEmptyString(jobId, "github.pages.artifactName", pages.artifactName);
+  }
+  if (typeof pages.environment === "string") {
+    validateNonEmptyString(jobId, "github.pages.environment", pages.environment);
+  } else if (pages.environment !== undefined) {
+    if (!isObjectRecord(pages.environment)) {
+      throw pipelineError(
+        "ASYNC_PIPELINE_GITHUB_PAGES_INVALID",
+        `Job "${jobId}" github.pages.environment must be a string or an object with a name.`
+      );
+    }
+    rejectUnknownFields(new Set(["name", "url"]), pages.environment, `Job "${jobId}" github.pages.environment`);
+    validateNonEmptyString(jobId, "github.pages.environment.name", pages.environment.name);
+    if (pages.environment.url !== undefined) {
+      validateNonEmptyString(jobId, "github.pages.environment.url", pages.environment.url);
+    }
+  }
+}
+
+function validateNonEmptyString(jobId: JobId, field: string, value: unknown): void {
+  if (typeof value !== "string" || value.trim() === "") {
+    throw pipelineError(
+      "ASYNC_PIPELINE_GITHUB_PAGES_INVALID",
+      `Job "${jobId}" ${field} must be a non-empty string.`
+    );
   }
 }
 

@@ -9,6 +9,7 @@ import { checkGitHubWorkflow, jobsForGitHubEvent, readGitHubEventContext, render
 import { loadPipeline } from "./loader.js";
 import { beginShutdown, commandProxy, planJob, runJob, runSingleTask, shutdownExitCode, type CommandResult, type PipelineCommands } from "./runner.js";
 import { runMcpServer } from "./mcp.js";
+import { publishGitHubPackage, publishNpmPackage, runLifecycleCli, runReleaseDoctor, type GitHubPackagePublishMode } from "./package-lifecycle.js";
 import { computeTaskInputManifest, createStore, diffInputManifests, pruneCacheEntries, readCacheInputManifest, readContextPacks, readTaskBaseline } from "./store.js";
 import { matrixForJob, readPipelineMetadata, resolveSources, sourceContext } from "./sources.js";
 import { checkTaskSync, describeTaskSync, renderTaskSync, writeTaskSync } from "./sync.js";
@@ -374,6 +375,14 @@ async function dispatchCommand(commandName: string, args: string[], context: Pip
     return 0;
   }
 
+  if (commandName === "publish") {
+    return handlePublishCommand(args, context, program);
+  }
+
+  if (commandName === "release") {
+    return handleReleaseCommand(args, context, program);
+  }
+
   if (commandName === "run") {
     const jobId = args[0];
     if (!jobId) throw new Error(`Usage: ${program} run <job>`);
@@ -439,6 +448,40 @@ async function dispatchCommand(commandName: string, args: string[], context: Pip
   }
 
   throw new Error(`Unknown command "${commandName}".`);
+}
+
+async function handlePublishCommand(args: string[], context: PipelineCliContext, program: string): Promise<number> {
+  const target = args[0];
+  const packagePath = requiredFlagValue(args, "--package", `Usage: ${program} publish github <pr|main|release> --package <path>\n       ${program} publish npm --package <path>`);
+  if (target === "github") {
+    const mode = args[1];
+    if (mode !== "pr" && mode !== "main" && mode !== "release") {
+      throw new Error(`Usage: ${program} publish github <pr|main|release> --package <path>`);
+    }
+    return runLifecycleCli(
+      () => publishGitHubPackage(mode as GitHubPackagePublishMode, { cwd: context.cwd, packagePath, env: context.env, io: context }),
+      context
+    );
+  }
+  if (target === "npm") {
+    return runLifecycleCli(
+      () => publishNpmPackage({ cwd: context.cwd, packagePath, env: context.env, io: context }),
+      context
+    );
+  }
+  throw new Error(`Usage: ${program} publish github <pr|main|release> --package <path>\n       ${program} publish npm --package <path>`);
+}
+
+async function handleReleaseCommand(args: string[], context: PipelineCliContext, program: string): Promise<number> {
+  const subcommand = args[0];
+  const packagePath = requiredFlagValue(args, "--package", `Usage: ${program} release doctor --package <path>`);
+  if (subcommand === "doctor") {
+    return runLifecycleCli(
+      () => runReleaseDoctor({ cwd: context.cwd, packagePath, env: context.env, io: context }),
+      context
+    );
+  }
+  throw new Error(`Usage: ${program} release doctor --package <path>`);
 }
 
 async function printDryRun(context: PipelineCliContext, format: "text" | "json", jobId?: string, taskId?: string): Promise<number> {
@@ -532,6 +575,13 @@ function collectFlagValues(args: string[], flag: string): string[] {
   return values;
 }
 
+function requiredFlagValue(args: string[], flag: string, usage: string): string {
+  const index = args.indexOf(flag);
+  const value = index >= 0 ? args[index + 1] : undefined;
+  if (!value) throw new Error(usage);
+  return value;
+}
+
 function parsePositiveInteger(args: string[], flag: string, fallback: number): number {
   const index = args.indexOf(flag);
   if (index < 0) return fallback;
@@ -578,6 +628,9 @@ function printHelp(program: string): string {
   ${program} sources sync
   ${program} metadata --format json [--include-sources]
   ${program} matrix <job> --format github
+  ${program} publish github <pr|main|release> --package <path>
+  ${program} publish npm --package <path>
+  ${program} release doctor --package <path>
   ${program} sync list
   ${program} sync generate
   ${program} sync check

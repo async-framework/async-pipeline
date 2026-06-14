@@ -1,6 +1,6 @@
 {
   "name": "@async/pipeline",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Local-first TypeScript pipelines with one task graph for laptops and CI.",
   "license": "MIT",
   "type": "module",
@@ -44,6 +44,8 @@
     "pack:check": "npm --cache ../../.async/npm-cache pack --dry-run"
   },
   "files": [
+    "API_SURFACE.md",
+    "api-contract.json",
     "dist"
   ],
   "sideEffects": false,

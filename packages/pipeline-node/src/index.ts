@@ -7,3 +7,4 @@ export * from "./doctor.js";
 export * from "./sources.js";
 export * from "./github.js";
 export * from "./sync.js";
+export * from "./package-lifecycle.js";

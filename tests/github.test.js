@@ -86,8 +86,9 @@ test("renders github job environment and secret env wiring", async () => {
 
     const rendered = await renderGitHubWorkflow(pipeline, { cwd: dir, configPath: join(dir, "pipeline.ts") });
 
+    assert.match(rendered.workflow, /workflow_dispatch:\n    inputs:\n      job:\n        description: "Pipeline job to run"\n        required: true\n        type: choice\n        options:\n          - "publish"/);
     assert.match(rendered.workflow, /publish:/);
-    assert.match(rendered.workflow, /if: github\.event_name == 'workflow_dispatch'/);
+    assert.match(rendered.workflow, /if: github\.event_name == 'workflow_dispatch' && github\.event\.inputs\.job == 'publish'/);
     assert.match(rendered.workflow, /environment:\n      name: "npm-publish"\n      url: "https:\/\/www\.npmjs\.com\/package\/@async\/pipeline"/);
     assert.match(rendered.workflow, /permissions:\n      contents: read\n      id-token: write/);
     assert.match(rendered.workflow, /NODE_AUTH_TOKEN: \$\{\{ secrets\.NPM_TOKEN \}\}/);
@@ -98,8 +99,90 @@ test("renders github job environment and secret env wiring", async () => {
       name: "npm-publish",
       url: "https://www.npmjs.com/package/@async/pipeline"
     });
+    assert.deepEqual(rendered.lock.manualDispatchJobs, ["publish"]);
     assert.deepEqual(rendered.lock.jobs[0].requires, { provenance: true });
     assert.equal(rendered.lock.jobs[0].env.NODE_AUTH_TOKEN.kind, "async-pipeline.env.secret");
+  } finally {
+    rmSync(dir, { force: true, recursive: true });
+  }
+});
+
+test("renders workflow_dispatch job selector inputs and gates manual jobs", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "async-pipeline-github-selector-"));
+  try {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ packageManager: "pnpm@10.20.0" }), "utf8");
+    const pipeline = definePipeline({
+      name: "selector-test",
+      triggers: {
+        main: trigger.github({ events: ["push"], branches: ["main"] }),
+        manual: trigger.manual()
+      },
+      tasks: {
+        verify: task({ run: sh`echo verify` }),
+        publish: task({ run: sh`echo publish` }),
+        doctor: task({ run: sh`echo doctor` })
+      },
+      jobs: {
+        verify: job({ target: "verify", trigger: ["main"] }),
+        publish: job({ target: "publish", trigger: ["manual"] }),
+        doctor: job({ target: "doctor", trigger: ["main", "manual"] })
+      }
+    });
+
+    const rendered = await renderGitHubWorkflow(pipeline, { cwd: dir, configPath: join(dir, "pipeline.ts") });
+
+    assert.match(rendered.workflow, /workflow_dispatch:\n    inputs:\n      job:\n        description: "Pipeline job to run"\n        required: true\n        type: choice\n        options:\n          - "doctor"\n          - "publish"/);
+    assert.match(rendered.workflow, /publish:\n    name: publish\n    if: github\.event_name == 'workflow_dispatch' && github\.event\.inputs\.job == 'publish'/);
+    assert.match(rendered.workflow, /doctor:\n    name: doctor\n    if: \(github\.event_name == 'push' && \(github\.ref == 'refs\/heads\/main'\)\) \|\| \(github\.event_name == 'workflow_dispatch' && github\.event\.inputs\.job == 'doctor'\)/);
+    assert.deepEqual(rendered.lock.manualDispatchJobs, ["doctor", "publish"]);
+  } finally {
+    rmSync(dir, { force: true, recursive: true });
+  }
+});
+
+test("renders github pages build and deploy jobs", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "async-pipeline-github-pages-"));
+  try {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ packageManager: "pnpm@10.20.0" }), "utf8");
+    const pipeline = definePipeline({
+      name: "pages-test",
+      triggers: {
+        pr: trigger.github({ events: ["pull_request"] }),
+        main: trigger.github({ events: ["push"], branches: ["main"] }),
+        manual: trigger.manual()
+      },
+      tasks: {
+        docs: task({ run: sh`pnpm docs:check` })
+      },
+      jobs: {
+        pages: job({
+          target: "docs",
+          trigger: ["pr", "main", "manual"],
+          github: {
+            pages: {
+              build: { kind: "jekyll", source: "./docs", destination: "./_site" }
+            }
+          }
+        })
+      }
+    });
+
+    const rendered = await renderGitHubWorkflow(pipeline, { cwd: dir, configPath: join(dir, "pipeline.ts") });
+
+    assert.match(rendered.workflow, /workflow_dispatch:\n    inputs:\n      job:\n        description: "Pipeline job to run"\n        required: true\n        type: choice\n        options:\n          - "pages"/);
+    assert.match(rendered.workflow, /pages:\n    name: pages\n    if: \(github\.event_name == 'pull_request'\) \|\| \(github\.event_name == 'push' && \(github\.ref == 'refs\/heads\/main'\)\) \|\| \(github\.event_name == 'workflow_dispatch' && github\.event\.inputs\.job == 'pages'\)/);
+    assert.match(rendered.workflow, /run: pnpm async-pipeline run pages/);
+    assert.match(rendered.workflow, /uses: actions\/configure-pages@v5/);
+    assert.match(rendered.workflow, /uses: actions\/jekyll-build-pages@v1\n        with:\n          source: "\.\/docs"\n          destination: "\.\/_site"/);
+    assert.match(rendered.workflow, /uses: actions\/upload-pages-artifact@v4\n        with:\n          path: "\.\/_site"/);
+    assert.match(rendered.workflow, /pages-deploy:\n    name: pages-deploy\n    needs: "pages"\n    if: github\.event_name != 'pull_request'\n    runs-on: ubuntu-latest/);
+    assert.match(rendered.workflow, /environment:\n      name: "github-pages"\n      url: "\$\{\{ steps\.deployment\.outputs\.page_url \}\}"/);
+    assert.match(rendered.workflow, /permissions:\n      pages: write\n      id-token: write/);
+    assert.match(rendered.workflow, /uses: actions\/deploy-pages@v4/);
+    assert.deepEqual(rendered.lock.manualDispatchJobs, ["pages"]);
+    assert.deepEqual(rendered.lock.jobs[0].github.pages, {
+      build: { kind: "jekyll", source: "./docs", destination: "./_site" }
+    });
   } finally {
     rmSync(dir, { force: true, recursive: true });
   }
@@ -167,6 +250,47 @@ test("rejects unknown github permission fields", () => {
   );
 });
 
+test("github pages config rejects invalid settings", () => {
+  assert.throws(
+    () =>
+      definePipeline({
+        name: "test",
+        tasks: { docs: task({ run: sh`echo docs` }) },
+        jobs: {
+          pages: job({
+            target: "docs",
+            github: {
+              pages: {
+                build: { kind: "static", source: "./docs" }
+              }
+            }
+          })
+        }
+      }),
+    (error) => error.code === "ASYNC_PIPELINE_UNKNOWN_FIELD" && /source/.test(error.message)
+  );
+
+  assert.throws(
+    () =>
+      definePipeline({
+        name: "test",
+        tasks: { docs: task({ run: sh`echo docs` }) },
+        jobs: {
+          pages: job({
+            target: "docs",
+            github: {
+              runsOnMatrix: ["ubuntu-latest", "macos-latest"],
+              pages: {
+                build: { kind: "static", path: "./dist" }
+              }
+            }
+          })
+        }
+      }),
+    (error) => error.code === "ASYNC_PIPELINE_GITHUB_PAGES_INVALID" && /runsOnMatrix/.test(error.message)
+  );
+});
+
 test("renders github job runner labels and runner matrices", async () => {
   const dir = await mkdtemp(join(tmpdir(), "async-pipeline-github-runners-"));
   try {
@@ -194,8 +318,8 @@ test("renders github job runner labels and runner matrices", async () => {
 
     const rendered = await renderGitHubWorkflow(pipeline, { cwd: dir, configPath: join(dir, "pipeline.ts") });
 
-    assert.match(rendered.workflow, /linux:\n    name: linux\n    if: github\.event_name == 'workflow_dispatch'\n    runs-on: ubuntu-24\.04/);
-    assert.match(rendered.workflow, /mac:\n    name: mac\n    if: github\.event_name == 'workflow_dispatch'\n    runs-on: \["self-hosted","macos","tart"\]/);
+    assert.match(rendered.workflow, /linux:\n    name: linux\n    if: github\.event_name == 'workflow_dispatch' && github\.event\.inputs\.job == 'linux'\n    runs-on: ubuntu-24\.04/);
+    assert.match(rendered.workflow, /mac:\n    name: mac\n    if: github\.event_name == 'workflow_dispatch' && github\.event\.inputs\.job == 'mac'\n    runs-on: \["self-hosted","macos","tart"\]/);
     assert.match(rendered.workflow, /matrix:\n    name: matrix \(\$\{\{ join\(matrix\.runner, ' '\) \}\}\)/);
     assert.match(rendered.workflow, /strategy:\n      fail-fast: false\n      matrix:\n        runner:\n          - \["ubuntu-latest"\]\n          - \["self-hosted","macos","tart"\]\n    runs-on: \$\{\{ matrix\.runner \}\}/);
     assert.deepEqual(rendered.lock.jobs.find((entry) => entry.id === "matrix")?.github?.runsOnMatrix, [
@@ -237,11 +361,11 @@ test("renders github execution profiles as runner defaults and CLI execution arg
 
     const rendered = await renderGitHubWorkflow(pipeline, { cwd: dir, configPath: join(dir, "pipeline.ts") });
 
-    assert.match(rendered.workflow, /linux:\n    name: linux\n    if: github\.event_name == 'workflow_dispatch'\n    runs-on: ubuntu-latest/);
+    assert.match(rendered.workflow, /linux:\n    name: linux\n    if: github\.event_name == 'workflow_dispatch' && github\.event\.inputs\.job == 'linux'\n    runs-on: ubuntu-latest/);
     assert.match(rendered.workflow, /run: pnpm async-pipeline run linux --execution linuxCi/);
-    assert.match(rendered.workflow, /apple:\n    name: apple\n    if: github\.event_name == 'workflow_dispatch'\n    runs-on: \["self-hosted","macos","arm64","apple-container"\]/);
+    assert.match(rendered.workflow, /apple:\n    name: apple\n    if: github\.event_name == 'workflow_dispatch' && github\.event\.inputs\.job == 'apple'\n    runs-on: \["self-hosted","macos","arm64","apple-container"\]/);
     assert.match(rendered.workflow, /run: pnpm async-pipeline run apple --execution appleCi/);
-    assert.match(rendered.workflow, /override:\n    name: override\n    if: github\.event_name == 'workflow_dispatch'\n    runs-on: ubuntu-24\.04/);
+    assert.match(rendered.workflow, /override:\n    name: override\n    if: github\.event_name == 'workflow_dispatch' && github\.event\.inputs\.job == 'override'\n    runs-on: ubuntu-24\.04/);
     assert.equal(rendered.lock.jobs.find((entry) => entry.id === "linux")?.execution, "linuxCi");
     assert.equal(rendered.lock.jobs.find((entry) => entry.id === "apple")?.github?.runsOn?.[3], "apple-container");
     assert.equal(rendered.lock.jobs.find((entry) => entry.id === "override")?.github?.runsOn, "ubuntu-24.04");
@@ -283,9 +407,11 @@ test("matches github jobs from event context", () => {
   assert.deepEqual(jobsForGitHubEvent(pipeline, { eventName: "push", ref: "refs/heads/release/1.0" }).map((entry) => entry.id), ["release"]);
   assert.deepEqual(jobsForGitHubEvent(pipeline, { eventName: "release" }).map((entry) => entry.id), ["published"]);
   assert.deepEqual(jobsForGitHubEvent(pipeline, { eventName: "schedule", schedule: "17 2 * * *" }).map((entry) => entry.id), ["nightly"]);
-  // workflow_dispatch runs only jobs with a manual trigger; everything else
-  // needs explicit selection (github run --job <id>).
-  assert.deepEqual(jobsForGitHubEvent(pipeline, { eventName: "workflow_dispatch" }).map((entry) => entry.id), ["deploy"]);
+  // workflow_dispatch requires selecting one manual job.
+  assert.deepEqual(jobsForGitHubEvent(pipeline, { eventName: "workflow_dispatch" }).map((entry) => entry.id), []);
+  assert.deepEqual(jobsForGitHubEvent(pipeline, { eventName: "workflow_dispatch", selectedJob: "deploy" }).map((entry) => entry.id), ["deploy"]);
+  assert.deepEqual(jobsForGitHubEvent(pipeline, { eventName: "workflow_dispatch", selectedJob: "verify" }).map((entry) => entry.id), []);
+  assert.deepEqual(jobsForGitHubEvent(pipeline, { eventName: "workflow_dispatch", selectedJob: "missing" }).map((entry) => entry.id), []);
 });
 
 test("github generate writes a current workflow and lock", () => {

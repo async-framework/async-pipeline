@@ -3,8 +3,8 @@
   "generator": "@async/pipeline",
   "config": "pipeline.ts",
   "workflow": ".github/workflows/async-pipeline.yml",
-  "hash": "sha256:0403bf01555b64609c415f7276378f0ea0935195e69c87fc4431051906862bc6",
-  "generatedAt": "2026-06-14T04:05:45.203Z",
+  "hash": "sha256:431002a3d62fec741d8b3e13a4ccfc72e33ba5b0c3b00ffac480f92060c46f27",
+  "generatedAt": "2026-06-14T08:22:26.729Z",
   "triggers": {
     "pull_request": {},
     "push": {
@@ -16,6 +16,28 @@
     "workflow_dispatch": {}
   },
   "jobs": [
+    {
+      "id": "pages",
+      "target": [
+        "docs"
+      ],
+      "trigger": [
+        "pr",
+        "main",
+        "manual"
+      ],
+      "env": {},
+      "github": {
+        "pages": {
+          "build": {
+            "kind": "jekyll",
+            "source": "./docs",
+            "destination": "./_site"
+          }
+        }
+      },
+      "if": "(github.event_name == 'pull_request') || (github.event_name == 'push' && (github.ref == 'refs/heads/main')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'pages')"
+    },
     {
       "id": "preview",
       "target": [
@@ -70,7 +92,7 @@
           "packages": "write"
         }
       },
-      "if": "(github.event_name == 'workflow_dispatch') || (github.event_name == 'release')"
+      "if": "(github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'publish') || (github.event_name == 'release')"
     },
     {
       "id": "snapshot",
@@ -116,5 +138,9 @@
   "packageManager": "pnpm",
   "buildCommand": "pnpm build",
   "nodeVersion": "24",
-  "taskCache": true
+  "taskCache": true,
+  "manualDispatchJobs": [
+    "pages",
+    "publish"
+  ]
 }

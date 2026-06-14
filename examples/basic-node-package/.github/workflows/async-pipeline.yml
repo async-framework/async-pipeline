@@ -11,6 +11,13 @@ on:
   schedule:
     - cron: "17 2 * * *"
   workflow_dispatch:
+    inputs:
+      job:
+        description: "Pipeline job to run"
+        required: true
+        type: choice
+        options:
+          - "verify"
 
 permissions:
   contents: read
@@ -57,7 +64,7 @@ jobs:
 
   verify:
     name: verify
-    if: (github.event_name == 'pull_request') || (github.event_name == 'push' && (github.ref == 'refs/heads/main')) || (github.event_name == 'workflow_dispatch')
+    if: (github.event_name == 'pull_request') || (github.event_name == 'push' && (github.ref == 'refs/heads/main')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'verify')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

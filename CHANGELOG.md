@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.1 - 2026-06-14
+
+### Features
+
+- Generated GitHub workflows now expose a required manual job selector for workflow_dispatch runs, and each manual-capable job is gated by the selected job id.
+- Generated GitHub workflows can now render GitHub Pages build/deploy jobs from `job({ github: { pages } })`, so Pages builds run on pull requests and deploys run from `main` or selected manual dispatch.
+- Add shared package lifecycle CLI commands for GitHub Packages previews/snapshots/releases, npm publishing, and release doctor checks with `--package <path>` package selection.
+- Dogfood the shared lifecycle commands in the self pipeline publish chain, including release doctor verification after GitHub Packages and npm publish.
+- Ship `@async/pipeline` API surface artifacts (`api-contract.json` and `API_SURFACE.md`) in the published package so the release ledger is available to downstream API contract checks.
+- Dogfood `@async/api-contract` in the self pipeline by syncing `pipeline:api-surface` scripts and making the release pack gate validate API surface ledgers.
+
 ## 0.4.0 - 2026-06-14
 
 ### Breaking

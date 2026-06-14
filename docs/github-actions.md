@@ -44,6 +44,28 @@ sync: {
 }
 ```
 
+## GitHub Pages
+
+Use `github.pages` on a job whose target verifies or builds docs/site content:
+
+```ts
+jobs: {
+  pages: job({
+    target: "docs",
+    trigger: ["pr", "main", "manual"],
+    github: {
+      pages: {
+        build: { kind: "jekyll", source: "./docs", destination: "./_site" }
+      }
+    }
+  })
+}
+```
+
+GitHub Pages jobs build on pull requests and deploy from `main` or selected manual dispatch through generated build and deploy jobs.
+
+The generated build job still runs `async-pipeline run <job-id>` first, then configures Pages, builds or selects the static artifact, and uploads it. The paired `<job-id>-deploy` job is skipped on pull requests and deploys the uploaded artifact with the `github-pages` environment and Pages token permissions on non-PR events.
+
 ## Runner Selection
 
 Generated jobs run on `ubuntu-latest` by default. Use `job({ github: { runsOn } })` to select a hosted runner or self-hosted label set, and `job({ github: { runsOnMatrix } })` to fan a job out across multiple runner label sets:
@@ -188,6 +210,8 @@ The generated workflow still uses GitHub event conditions from pipeline triggers
 - `release` can match `trigger.github({ events: ["release"] })`.
 - `schedule` matches `trigger.cron(...)`.
 - `workflow_dispatch` can run manual jobs.
+
+Manual workflow runs require selecting a single pipeline job; generated manual jobs are gated on that selection.
 
 The execution records still go under `.async/runs` inside the runner workspace.
 

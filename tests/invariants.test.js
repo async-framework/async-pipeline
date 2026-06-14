@@ -342,9 +342,16 @@ test("PROMISE: the release chain publishes GitHub Packages before npm, and previ
     ["publish-github"],
     "the npm publish task must depend on the GitHub Packages mirror task"
   );
-  assert.equal(pipeline.tasks["publish-github"].run.command, "node scripts/publish-github.mjs release");
-  assert.equal(pipeline.tasks["snapshot"].run.command, "node scripts/publish-github.mjs main");
-  assert.equal(pipeline.tasks["preview"].run.command, "node scripts/publish-github.mjs pr");
+  assert.equal(pipeline.tasks["publish-github"].run.command, "pnpm async-pipeline publish github release --package packages/pipeline");
+  assert.equal(pipeline.tasks["snapshot"].run.command, "pnpm async-pipeline publish github main --package packages/pipeline");
+  assert.equal(pipeline.tasks["preview"].run.command, "pnpm async-pipeline publish github pr --package packages/pipeline");
+  assert.deepEqual(
+    pipeline.tasks["publish"].steps.map((step) => step.command),
+    [
+      "pnpm async-pipeline publish npm --package packages/pipeline",
+      "pnpm async-pipeline release doctor --package packages/pipeline"
+    ]
+  );
 
   assert.deepEqual(pipeline.jobs["preview"].trigger, ["pr"]);
   assert.deepEqual(pipeline.jobs["snapshot"].trigger, ["main"]);
@@ -364,4 +371,46 @@ test("PROMISE: the release chain publishes GitHub Packages before npm, and previ
   );
   assert.equal(pipeline.jobs["snapshot"].github.permissions.packages, "write");
   assert.equal(pipeline.jobs["publish"].github.permissions.packages, "write");
+});
+
+test("PROMISE: package API surface artifacts are published with @async/pipeline", async () => {
+  const rootManifest = JSON.parse(await readFile(new URL("../api-contract.json", import.meta.url), "utf8"));
+  const packageManifest = JSON.parse(await readFile(new URL("../packages/pipeline/api-contract.json", import.meta.url), "utf8"));
+  const rootLedger = await readFile(new URL("../API_SURFACE.md", import.meta.url), "utf8");
+  const packageLedger = await readFile(new URL("../packages/pipeline/API_SURFACE.md", import.meta.url), "utf8");
+  const packageJson = JSON.parse(await readFile(new URL("../packages/pipeline/package.json", import.meta.url), "utf8"));
+
+  assert.equal(rootManifest.packageName, "@async/pipeline");
+  assert.deepEqual(packageManifest, rootManifest, "published package manifest must stay in sync with the root API contract");
+  assert.equal(packageLedger, rootLedger, "published package ledger must stay in sync with the root API surface ledger");
+  assert.ok(packageJson.files.includes("api-contract.json"), "api-contract.json must be included in npm package files");
+  assert.ok(packageJson.files.includes("API_SURFACE.md"), "API_SURFACE.md must be included in npm package files");
+});
+
+test("PROMISE: API surface drift checks are wired through @async/api-contract and the release gate", async () => {
+  const { default: pipeline } = await import("../pipeline.ts");
+  const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+  const workspaceConfig = await readFile(new URL("../pnpm-workspace.yaml", import.meta.url), "utf8");
+
+  assert.equal(packageJson.devDependencies["@async/api-contract"], "0.1.0");
+  assert.match(workspaceConfig, /minimumReleaseAgeExclude:\n\s+- "@async\/\*"/);
+  assert.equal(packageJson.scripts["pipeline:api-surface"], "async-pipeline run-task api-surface");
+  assert.equal(packageJson.scripts["pipeline:api-surface:generate"], "async-pipeline run-task api-surface-generate");
+  assert.ok(pipeline.tasks.pack.dependsOn.includes("api-surface"), "release pack gate must include API surface drift checks");
+  assert.deepEqual(
+    pipeline.tasks["api-surface"].steps.map((step) => step.command),
+    [
+      "pnpm api-contract check --manifest api-contract.json",
+      "pnpm api-contract ledger --manifest api-contract.json --check API_SURFACE.md",
+      "pnpm api-contract check --manifest packages/pipeline/api-contract.json",
+      "pnpm api-contract ledger --manifest packages/pipeline/api-contract.json --check packages/pipeline/API_SURFACE.md"
+    ]
+  );
+  assert.deepEqual(
+    pipeline.tasks["api-surface-generate"].steps.map((step) => step.command),
+    [
+      "pnpm api-contract ledger --manifest api-contract.json --out API_SURFACE.md",
+      "pnpm api-contract ledger --manifest packages/pipeline/api-contract.json --out packages/pipeline/API_SURFACE.md"
+    ]
+  );
 });

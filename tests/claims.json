@@ -138,6 +138,42 @@
       ]
     },
     {
+      "id": "github.manual-selector",
+      "source": "docs/github-actions.md",
+      "anchor": "Manual workflow runs require selecting a single pipeline job; generated manual jobs are gated on that selection.",
+      "tests": [
+        "renders workflow_dispatch job selector inputs and gates manual jobs",
+        "matches github jobs from event context"
+      ]
+    },
+    {
+      "id": "changelog.manual-selector",
+      "source": "CHANGELOG.md",
+      "anchor": "Generated GitHub workflows now expose a required manual job selector for workflow_dispatch runs, and each manual-capable job is gated by the selected job id.",
+      "tests": [
+        "renders workflow_dispatch job selector inputs and gates manual jobs",
+        "matches github jobs from event context"
+      ]
+    },
+    {
+      "id": "github.pages-generated",
+      "source": "docs/github-actions.md",
+      "anchor": "GitHub Pages jobs build on pull requests and deploy from `main` or selected manual dispatch through generated build and deploy jobs.",
+      "tests": [
+        "renders github pages build and deploy jobs",
+        "github pages config rejects invalid settings"
+      ]
+    },
+    {
+      "id": "changelog.pages-generated",
+      "source": "CHANGELOG.md",
+      "anchor": "Generated GitHub workflows can now render GitHub Pages build/deploy jobs from `job({ github: { pages } })`, so Pages builds run on pull requests and deploys run from `main` or selected manual dispatch.",
+      "tests": [
+        "renders github pages build and deploy jobs",
+        "github pages config rejects invalid settings"
+      ]
+    },
+    {
       "id": "api.container-sandbox",
       "source": "docs/api.md",
       "anchor": "`sandbox.container(...)` declares OCI-compatible container image intent; OCI is the standard container image format used by Docker, Apple container, Podman, containerd, and registries.",
@@ -624,6 +660,59 @@
       "tests": [
         "PROMISE: stable releases mirror to GitHub Packages as @async/pipeline with the latest tag",
         "PROMISE: the release chain publishes GitHub Packages before npm, and previews/snapshots are wired to their triggers"
+      ]
+    },
+    {
+      "id": "api.package-lifecycle-cli",
+      "source": "docs/api.md",
+      "anchor": "Package lifecycle commands are available as `async-pipeline publish github <pr|main|release> --package <path>`, `async-pipeline publish npm --package <path>`, and `async-pipeline release doctor --package <path>`.",
+      "tests": [
+        "lifecycle CLI publishes GitHub Packages snapshots from a package path",
+        "lifecycle CLI skips npm publish for an already published package and keeps public access",
+        "lifecycle CLI release doctor verifies npm, GitHub Packages, and GitHub Release"
+      ]
+    },
+    {
+      "id": "api.release-doctor-lifecycle",
+      "source": "docs/api.md",
+      "anchor": "`release doctor` verifies npm, GitHub Packages, and GitHub Release state for the selected package after the release publish chain.",
+      "tests": [
+        "lifecycle CLI release doctor verifies npm, GitHub Packages, and GitHub Release",
+        "PROMISE: the release chain publishes GitHub Packages before npm, and previews/snapshots are wired to their triggers"
+      ]
+    },
+    {
+      "id": "changelog.package-lifecycle-cli",
+      "source": "CHANGELOG.md",
+      "anchor": "Add shared package lifecycle CLI commands for GitHub Packages previews/snapshots/releases, npm publishing, and release doctor checks with `--package <path>` package selection.",
+      "tests": [
+        "lifecycle CLI publishes GitHub Packages snapshots from a package path",
+        "lifecycle CLI skips npm publish for an already published package and keeps public access",
+        "lifecycle CLI release doctor verifies npm, GitHub Packages, and GitHub Release"
+      ]
+    },
+    {
+      "id": "changelog.self-lifecycle-dogfood",
+      "source": "CHANGELOG.md",
+      "anchor": "Dogfood the shared lifecycle commands in the self pipeline publish chain, including release doctor verification after GitHub Packages and npm publish.",
+      "tests": [
+        "PROMISE: the release chain publishes GitHub Packages before npm, and previews/snapshots are wired to their triggers"
+      ]
+    },
+    {
+      "id": "changelog.pipeline-api-surface-artifacts",
+      "source": "CHANGELOG.md",
+      "anchor": "Ship `@async/pipeline` API surface artifacts (`api-contract.json` and `API_SURFACE.md`) in the published package so the release ledger is available to downstream API contract checks.",
+      "tests": [
+        "PROMISE: package API surface artifacts are published with @async/pipeline"
+      ]
+    },
+    {
+      "id": "changelog.pipeline-api-contract-dogfood",
+      "source": "CHANGELOG.md",
+      "anchor": "Dogfood `@async/api-contract` in the self pipeline by syncing `pipeline:api-surface` scripts and making the release pack gate validate API surface ledgers.",
+      "tests": [
+        "PROMISE: API surface drift checks are wired through @async/api-contract and the release gate"
       ]
     },
     {

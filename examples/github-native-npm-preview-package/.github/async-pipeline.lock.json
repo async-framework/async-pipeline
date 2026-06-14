@@ -3,8 +3,8 @@
   "generator": "@async/pipeline",
   "config": "pipeline.mjs",
   "workflow": ".github/workflows/async-pipeline.yml",
-  "hash": "sha256:71f0ae0944c1d720306d575d4afff3efa3169292df9af699f7320c45e77a7514",
-  "generatedAt": "2026-06-11T05:13:09.295Z",
+  "hash": "sha256:1162d997924570c2f4c2a06a8916fdb81f5935d2b5a32057e33580fc43077a98",
+  "generatedAt": "2026-06-14T06:26:19.657Z",
   "triggers": {
     "pull_request": {},
     "push": {
@@ -26,7 +26,7 @@
         "manual"
       ],
       "env": {},
-      "if": "(github.event_name == 'push' && (github.ref == 'refs/heads/main')) || (github.event_name == 'workflow_dispatch')"
+      "if": "(github.event_name == 'push' && (github.ref == 'refs/heads/main')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'mainSnapshot')"
     },
     {
       "id": "prPreview",
@@ -38,7 +38,7 @@
         "manual"
       ],
       "env": {},
-      "if": "(github.event_name == 'pull_request') || (github.event_name == 'workflow_dispatch')"
+      "if": "(github.event_name == 'pull_request') || (github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'prPreview')"
     },
     {
       "id": "stableRelease",
@@ -50,10 +50,15 @@
         "manual"
       ],
       "env": {},
-      "if": "(github.event_name == 'release') || (github.event_name == 'workflow_dispatch')"
+      "if": "(github.event_name == 'release') || (github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'stableRelease')"
     }
   ],
   "packageManager": "pnpm",
   "nodeVersion": "24",
-  "taskCache": true
+  "taskCache": true,
+  "manualDispatchJobs": [
+    "mainSnapshot",
+    "prPreview",
+    "stableRelease"
+  ]
 }

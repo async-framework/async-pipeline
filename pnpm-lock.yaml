@@ -8,6 +8,9 @@ importers:
 
   .:
     devDependencies:
+      '@async/api-contract':
+        specifier: 0.1.0
+        version: 0.1.0
       '@async/pipeline':
         specifier: workspace:*
         version: link:packages/pipeline
@@ -90,6 +93,11 @@ importers:
 
 packages:
 
+  '@async/api-contract@0.1.0':
+    resolution: {integrity: sha512-kyeqE/Smmwwadwh7Zvs0LZoXuIh7k+6G5rqdyWIjY6vHLZQ1emp9EpL/20m6DtmjauTJxMNn/R7FQACUwfBeUw==}
+    engines: {node: '>=24'}
+    hasBin: true
+
   '@types/node@24.12.4':
     resolution: {integrity: sha512-GUUEShf+PBCGW2KaXwcIt3Yk+e3pkKwWKb9GSyM9WQVE+ep2jzmHdGsHzu4wgcZy5fN9FBdVzjpBQsYlpfpgLA==}
 
@@ -102,6 +110,8 @@ packages:
     resolution: {integrity: sha512-Zz+aZWSj8LE6zoxD+xrjh4VfkIG8Ya6LvYkZqtUQGJPZjYl53ypCaUwWqo7eI0x66KBGeRo+mlBEkMSeSZ38Nw==}
 
 snapshots:
+
+  '@async/api-contract@0.1.0': {}
 
   '@types/node@24.12.4':
     dependencies:

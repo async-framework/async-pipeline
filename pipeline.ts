@@ -28,10 +28,17 @@ export default definePipeline({
       prefix: "pipeline",
       runners: ["package"],
       targets: [{ package: "async-pipeline-workspace" }],
-      jobs: ["verify"],
+      jobs: ["pages", "preview", "publish", "snapshot", "verify"],
       scripts: {
+        "api-surface": "run-task api-surface",
+        "api-surface:generate": "run-task api-surface-generate",
         "github:check": "github check",
         "github:generate": "github generate",
+        "publish:github:main": "publish github main --package packages/pipeline",
+        "publish:github:pr": "publish github pr --package packages/pipeline",
+        "publish:github:release": "publish github release --package packages/pipeline",
+        "publish:npm": "publish npm --package packages/pipeline",
+        "release:doctor": "release doctor --package packages/pipeline",
         "sync:check": "sync check"
       }
     }
@@ -130,6 +137,38 @@ export default definePipeline({
       cache: true,
       run: sh`pnpm claims:check`
     }),
+    "api-surface-generate": task({
+      description: "Regenerate the @async/pipeline API surface review ledgers from the checked-in manifests.",
+      inputs: [
+        "api-contract.json",
+        "packages/pipeline/api-contract.json"
+      ],
+      outputs: [
+        "API_SURFACE.md",
+        "packages/pipeline/API_SURFACE.md"
+      ],
+      cache: false,
+      run: [
+        sh`pnpm api-contract ledger --manifest api-contract.json --out API_SURFACE.md`,
+        sh`pnpm api-contract ledger --manifest packages/pipeline/api-contract.json --out packages/pipeline/API_SURFACE.md`
+      ]
+    }),
+    "api-surface": task({
+      description: "API surface drift checks: validate the @async/pipeline manifests and generated review ledgers through @async/api-contract.",
+      inputs: [
+        "api-contract.json",
+        "API_SURFACE.md",
+        "packages/pipeline/api-contract.json",
+        "packages/pipeline/API_SURFACE.md"
+      ],
+      cache: true,
+      run: [
+        sh`pnpm api-contract check --manifest api-contract.json`,
+        sh`pnpm api-contract ledger --manifest api-contract.json --check API_SURFACE.md`,
+        sh`pnpm api-contract check --manifest packages/pipeline/api-contract.json`,
+        sh`pnpm api-contract ledger --manifest packages/pipeline/api-contract.json --check packages/pipeline/API_SURFACE.md`
+      ]
+    }),
     build: task({
       inputs: ["production"],
       outputs: ["packages/*/dist/**"],
@@ -163,7 +202,7 @@ export default definePipeline({
       run: sh`node --test tests/examples/examples.test.js`
     }),
     pack: task({
-      dependsOn: ["test", "drift", "claims", "docs", "sync-check", "examples"],
+      dependsOn: ["test", "drift", "claims", "docs", "api-surface", "sync-check", "examples"],
       inputs: ["production", "package.json", "packages/*/package.json", "scripts/check-exports.mjs"],
       cache: false,
       run: [sh`pnpm exports:check`, sh`pnpm pack:check`]
@@ -175,31 +214,34 @@ export default definePipeline({
     preview: task({
       description: "Same-repo PRs publish an immutable 0.0.0-pr.<n>.sha.<sha> preview to GitHub Packages, move the pr-<n> dist-tag, and upsert one install-instructions comment. Fork PRs skip.",
       dependsOn: ["pack"],
-      inputs: ["production", "package.json", "packages/*/package.json", "scripts/publish-github.mjs"],
+      inputs: ["production", "package.json", "packages/*/package.json"],
       cache: false,
-      run: sh`node scripts/publish-github.mjs pr`
+      run: sh`pnpm async-pipeline publish github pr --package packages/pipeline`
     }),
     snapshot: task({
       description: "Pushes to main publish an immutable 0.0.0-main.sha.<sha> snapshot to GitHub Packages and move the main dist-tag while the commit is still the branch head.",
       dependsOn: ["pack"],
-      inputs: ["production", "package.json", "packages/*/package.json", "scripts/publish-github.mjs"],
+      inputs: ["production", "package.json", "packages/*/package.json"],
       cache: false,
-      run: sh`node scripts/publish-github.mjs main`
+      run: sh`pnpm async-pipeline publish github main --package packages/pipeline`
     }),
     "publish-github": task({
       description: "Stable mirror to GitHub Packages (latest tag). Runs before the npm publish so a stable version always exists on GitHub Packages even when npm has an issue.",
       dependsOn: ["pack"],
-      inputs: ["production", "package.json", "packages/*/package.json", "scripts/publish-github.mjs"],
+      inputs: ["production", "package.json", "packages/*/package.json"],
       cache: false,
-      run: sh`node scripts/publish-github.mjs release`
+      run: sh`pnpm async-pipeline publish github release --package packages/pipeline`
     }),
     publish: task({
       // GitHub Packages first, then npm: the fallback registry is never
       // behind the primary one.
       dependsOn: ["publish-github"],
-      inputs: ["production", "package.json", "packages/*/package.json", "scripts/publish.mjs"],
+      inputs: ["production", "package.json", "packages/*/package.json"],
       cache: false,
-      run: sh`node scripts/publish.mjs`
+      run: [
+        sh`pnpm async-pipeline publish npm --package packages/pipeline`,
+        sh`pnpm async-pipeline release doctor --package packages/pipeline`
+      ]
     })
   },
   jobs: {
@@ -210,6 +252,15 @@ export default definePipeline({
         // Both GitHub-hosted. Self-hosted label sets (e.g. Tart VMs on Apple
         // Silicon) are supported too; see docs/github-actions.md.
         runsOnMatrix: ["ubuntu-latest", "macos-latest"]
+      }
+    }),
+    pages: job({
+      target: "docs",
+      trigger: ["pr", "main", "manual"],
+      github: {
+        pages: {
+          build: { kind: "jekyll", source: "./docs", destination: "./_site" }
+        }
       }
     }),
     preview: job({

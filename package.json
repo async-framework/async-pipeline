@@ -2,7 +2,7 @@
   "name": "async-pipeline-workspace",
   "private": true,
   "license": "MIT",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "type": "module",
   "packageManager": "pnpm@10.20.0",
   "engines": {
@@ -16,8 +16,19 @@
     "drift:check": "node scripts/check-release-drift.mjs",
     "exports:check": "node scripts/check-exports.mjs",
     "pack:check": "pnpm --filter @async/pipeline pack:check",
+    "pipeline:api-surface": "async-pipeline run-task api-surface",
+    "pipeline:api-surface:generate": "async-pipeline run-task api-surface-generate",
     "pipeline:github:check": "async-pipeline github check",
     "pipeline:github:generate": "async-pipeline github generate",
+    "pipeline:pages": "async-pipeline run pages",
+    "pipeline:preview": "async-pipeline run preview",
+    "pipeline:publish": "async-pipeline run publish",
+    "pipeline:publish:github:main": "async-pipeline publish github main --package packages/pipeline",
+    "pipeline:publish:github:pr": "async-pipeline publish github pr --package packages/pipeline",
+    "pipeline:publish:github:release": "async-pipeline publish github release --package packages/pipeline",
+    "pipeline:publish:npm": "async-pipeline publish npm --package packages/pipeline",
+    "pipeline:release:doctor": "async-pipeline release doctor --package packages/pipeline",
+    "pipeline:snapshot": "async-pipeline run snapshot",
     "pipeline:sync:check": "async-pipeline sync check",
     "pipeline:verify": "async-pipeline run verify",
     "release:check": "pnpm build && pnpm async-pipeline run verify --force",
@@ -25,6 +36,7 @@
     "typecheck": "pnpm -r --sort typecheck"
   },
   "devDependencies": {
+    "@async/api-contract": "0.1.0",
     "@async/pipeline": "workspace:*",
     "@types/node": "24.12.4",
     "typescript": "6.0.3"

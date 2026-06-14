@@ -1,0 +1,350 @@
+{
+  "format": "api-contract.package.v1",
+  "packageName": "@async/pipeline",
+  "catalogs": [
+    {
+      "format": "api-contract.catalog.v1",
+      "contractId": "@async/pipeline.declaration",
+      "title": "Async Pipeline Declarations",
+      "features": [
+        {
+          "id": "agent.step",
+          "title": "Agent step declaration",
+          "releaseTag": "beta",
+          "stability": "preview",
+          "lifecycle": "active",
+          "group": "agents",
+          "docsUrl": "https://github.com/async/pipeline/blob/main/docs/api.md#agents"
+        },
+        {
+          "id": "agent.stdoutTo",
+          "title": "Agent stdout artifact routing",
+          "releaseTag": "beta",
+          "stability": "preview",
+          "lifecycle": "active",
+          "group": "agents",
+          "docsUrl": "https://github.com/async/pipeline/blob/main/docs/api.md#agents"
+        },
+        {
+          "id": "config.definePipeline",
+          "title": "definePipeline config entrypoint",
+          "releaseTag": "public",
+          "stability": "stable",
+          "lifecycle": "active",
+          "group": "config",
+          "docsUrl": "https://github.com/async/pipeline/blob/main/docs/api.md#definepipeline"
+        },
+        {
+          "id": "config.env",
+          "title": "Environment variable and secret declarations",
+          "releaseTag": "public",
+          "stability": "stable",
+          "lifecycle": "active",
+          "group": "config",
+          "docsUrl": "https://github.com/async/pipeline/blob/main/docs/api.md#env"
+        },
+        {
+          "id": "config.github.pages",
+          "title": "Generated GitHub Pages job declaration",
+          "releaseTag": "beta",
+          "stability": "preview",
+          "lifecycle": "active",
+          "group": "config",
+          "docsUrl": "https://github.com/async/pipeline/blob/main/docs/github-actions.md"
+        },
+        {
+          "id": "config.job",
+          "title": "Job declaration",
+          "releaseTag": "public",
+          "stability": "stable",
+          "lifecycle": "active",
+          "group": "config",
+          "docsUrl": "https://github.com/async/pipeline/blob/main/docs/api.md#job"
+        },
+        {
+          "id": "config.source",
+          "title": "Source pipeline declaration",
+          "releaseTag": "public",
+          "stability": "stable",
+          "lifecycle": "active",
+          "group": "config",
+          "docsUrl": "https://github.com/async/pipeline/blob/main/docs/api.md#source"
+        },
+        {
+          "id": "config.sync.github",
+          "title": "Generated GitHub Actions sync declaration",
+          "releaseTag": "public",
+          "stability": "stable",
+          "lifecycle": "active",
+          "group": "config",
+          "docsUrl": "https://github.com/async/pipeline/blob/main/docs/sync.md"
+        },
+        {
+          "id": "config.sync.tasks",
+          "title": "Generated package script and task sync declaration",
+          "releaseTag": "public",
+          "stability": "stable",
+          "lifecycle": "active",
+          "group": "config",
+          "docsUrl": "https://github.com/async/pipeline/blob/main/docs/sync.md"
+        },
+        {
+          "id": "config.task",
+          "title": "Task declaration",
+          "releaseTag": "public",
+          "stability": "stable",
+          "lifecycle": "active",
+          "group": "config",
+          "docsUrl": "https://github.com/async/pipeline/blob/main/docs/api.md#task"
+        },
+        {
+          "id": "config.trigger.github",
+          "title": "GitHub trigger declaration",
+          "releaseTag": "public",
+          "stability": "stable",
+          "lifecycle": "active",
+          "group": "config",
+          "docsUrl": "https://github.com/async/pipeline/blob/main/docs/api.md#trigger"
+        },
+        {
+          "id": "config.trigger.manual",
+          "title": "Manual trigger declaration",
+          "releaseTag": "public",
+          "stability": "stable",
+          "lifecycle": "active",
+          "group": "config",
+          "docsUrl": "https://github.com/async/pipeline/blob/main/docs/api.md#trigger"
+        },
+        {
+          "id": "step.shell",
+          "title": "Shell step declaration",
+          "releaseTag": "public",
+          "stability": "stable",
+          "lifecycle": "active",
+          "group": "steps",
+          "docsUrl": "https://github.com/async/pipeline/blob/main/docs/api.md#sh"
+        }
+      ]
+    },
+    {
+      "format": "api-contract.catalog.v1",
+      "contractId": "@async/pipeline.cli",
+      "title": "Async Pipeline CLI",
+      "features": [
+        {
+          "id": "cli.github.check",
+          "title": "Generated GitHub workflow drift check",
+          "releaseTag": "public",
+          "stability": "stable",
+          "lifecycle": "active",
+          "group": "github",
+          "docsUrl": "https://github.com/async/pipeline/blob/main/docs/github-actions.md"
+        },
+        {
+          "id": "cli.github.generate",
+          "title": "Generated GitHub workflow writer",
+          "releaseTag": "public",
+          "stability": "stable",
+          "lifecycle": "active",
+          "group": "github",
+          "docsUrl": "https://github.com/async/pipeline/blob/main/docs/github-actions.md"
+        },
+        {
+          "id": "cli.mcp",
+          "title": "Read-only MCP inspection server",
+          "releaseTag": "beta",
+          "stability": "preview",
+          "lifecycle": "active",
+          "group": "mcp",
+          "docsUrl": "https://github.com/async/pipeline/blob/main/docs/api.md#mcp"
+        },
+        {
+          "id": "cli.publish.github",
+          "title": "GitHub Packages preview, snapshot, and release publishing",
+          "releaseTag": "beta",
+          "stability": "preview",
+          "lifecycle": "active",
+          "group": "lifecycle",
+          "docsUrl": "https://github.com/async/pipeline/blob/main/docs/api.md#package-lifecycle-cli"
+        },
+        {
+          "id": "cli.publish.npm",
+          "title": "npm publish with provenance and idempotent existing-version skip",
+          "releaseTag": "beta",
+          "stability": "preview",
+          "lifecycle": "active",
+          "group": "lifecycle",
+          "docsUrl": "https://github.com/async/pipeline/blob/main/docs/api.md#package-lifecycle-cli"
+        },
+        {
+          "id": "cli.release.doctor",
+          "title": "Release doctor verification for npm, GitHub Packages, and GitHub Releases",
+          "releaseTag": "beta",
+          "stability": "preview",
+          "lifecycle": "active",
+          "group": "lifecycle",
+          "docsUrl": "https://github.com/async/pipeline/blob/main/docs/api.md#package-lifecycle-cli"
+        },
+        {
+          "id": "cli.run",
+          "title": "Pipeline job runner",
+          "releaseTag": "public",
+          "stability": "stable",
+          "lifecycle": "active",
+          "group": "runner",
+          "docsUrl": "https://github.com/async/pipeline/blob/main/docs/api.md"
+        },
+        {
+          "id": "cli.run-task",
+          "title": "Single task runner",
+          "releaseTag": "public",
+          "stability": "stable",
+          "lifecycle": "active",
+          "group": "runner",
+          "docsUrl": "https://github.com/async/pipeline/blob/main/docs/api.md"
+        },
+        {
+          "id": "cli.sync.check",
+          "title": "Generated package script and task drift check",
+          "releaseTag": "public",
+          "stability": "stable",
+          "lifecycle": "active",
+          "group": "sync",
+          "docsUrl": "https://github.com/async/pipeline/blob/main/docs/sync.md"
+        },
+        {
+          "id": "cli.sync.generate",
+          "title": "Generated package script and task writer",
+          "releaseTag": "public",
+          "stability": "stable",
+          "lifecycle": "active",
+          "group": "sync",
+          "docsUrl": "https://github.com/async/pipeline/blob/main/docs/sync.md"
+        }
+      ]
+    },
+    {
+      "format": "api-contract.catalog.v1",
+      "contractId": "@async/pipeline.runtime",
+      "title": "Async Pipeline Runtime",
+      "features": [
+        {
+          "id": "runtime.cache.file",
+          "title": "File cache execution and output restoration",
+          "releaseTag": "public",
+          "stability": "stable",
+          "lifecycle": "active",
+          "group": "cache",
+          "docsUrl": "https://github.com/async/pipeline/blob/main/docs/api.md#definecache"
+        },
+        {
+          "id": "runtime.context-packs",
+          "title": "Failure context packs",
+          "releaseTag": "beta",
+          "stability": "preview",
+          "lifecycle": "active",
+          "group": "diagnostics",
+          "docsUrl": "https://github.com/async/pipeline/blob/main/docs/api.md#failure-context-packs"
+        },
+        {
+          "id": "runtime.execution-records",
+          "title": "Execution records and run state",
+          "releaseTag": "public",
+          "stability": "stable",
+          "lifecycle": "active",
+          "group": "records",
+          "docsUrl": "https://github.com/async/pipeline/blob/main/docs/api.md#execution-record-shape"
+        },
+        {
+          "id": "runtime.run-lock",
+          "title": "Per-project run lock",
+          "releaseTag": "public",
+          "stability": "stable",
+          "lifecycle": "active",
+          "group": "records",
+          "docsUrl": "https://github.com/async/pipeline/blob/main/docs/api.md#run-lock"
+        },
+        {
+          "id": "runtime.sandbox.container",
+          "title": "Container sandbox declaration and execution profiles",
+          "releaseTag": "beta",
+          "stability": "preview",
+          "lifecycle": "active",
+          "group": "sandbox",
+          "docsUrl": "https://github.com/async/pipeline/blob/main/docs/api.md#sandboxes"
+        }
+      ]
+    }
+  ],
+  "supported": [
+    {
+      "format": "api-contract.surface.v1",
+      "contractId": "@async/pipeline.declaration",
+      "features": [
+        "agent.step",
+        "agent.stdoutTo",
+        "config.definePipeline",
+        "config.env",
+        "config.github.pages",
+        "config.job",
+        "config.source",
+        "config.sync.github",
+        "config.sync.tasks",
+        "config.task",
+        "config.trigger.github",
+        "config.trigger.manual",
+        "step.shell"
+      ]
+    },
+    {
+      "format": "api-contract.surface.v1",
+      "contractId": "@async/pipeline.cli",
+      "features": [
+        "cli.github.check",
+        "cli.github.generate",
+        "cli.mcp",
+        "cli.publish.github",
+        "cli.publish.npm",
+        "cli.release.doctor",
+        "cli.run",
+        "cli.run-task",
+        "cli.sync.check",
+        "cli.sync.generate"
+      ]
+    },
+    {
+      "format": "api-contract.surface.v1",
+      "contractId": "@async/pipeline.runtime",
+      "features": [
+        "runtime.cache.file",
+        "runtime.context-packs",
+        "runtime.execution-records",
+        "runtime.run-lock",
+        "runtime.sandbox.container"
+      ]
+    }
+  ],
+  "required": [
+    {
+      "format": "api-contract.surface.v1",
+      "contractId": "@async/pipeline.declaration",
+      "features": [
+        "config.definePipeline",
+        "config.job",
+        "config.task",
+        "config.trigger.github",
+        "step.shell"
+      ]
+    },
+    {
+      "format": "api-contract.surface.v1",
+      "contractId": "@async/pipeline.cli",
+      "features": [
+        "cli.github.check",
+        "cli.github.generate",
+        "cli.run",
+        "cli.sync.check"
+      ]
+    }
+  ]
+}

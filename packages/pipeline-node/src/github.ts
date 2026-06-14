@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
-import type { EnvValue, ExecutionProfileId, GitHubJobConfig, JobEnvironment, JobRequirements, JobId, NormalizedJob, NormalizedPipeline, TriggerDefinition, TriggerId } from "@async/pipeline-core";
+import type { EnvValue, ExecutionProfileId, GitHubJobConfig, GitHubPagesConfig, JobEnvironment, JobRequirements, JobId, NormalizedJob, NormalizedPipeline, TriggerDefinition, TriggerId } from "@async/pipeline-core";
 import { githubConfigForJob, pipelineError } from "@async/pipeline-core";
 
 export const GITHUB_WORKFLOW_PATH = ".github/workflows/async-pipeline.yml";
@@ -30,6 +30,7 @@ export interface GitHubLock {
   buildCommand?: string;
   nodeVersion: string;
   taskCache: boolean;
+  manualDispatchJobs?: string[];
 }
 
 export interface GitHubRenderResult {
@@ -45,6 +46,7 @@ export interface GitHubEventContext {
   baseRef?: string;
   headRef?: string;
   schedule?: string;
+  selectedJob?: string;
   payload?: unknown;
 }
 
@@ -68,7 +70,8 @@ export async function renderGitHubWorkflow(pipeline: NormalizedPipeline, options
     packageManager: renderModel.packageManager,
     buildCommand: renderModel.buildCommand,
     nodeVersion: renderModel.nodeVersion,
-    taskCache: renderModel.taskCache
+    taskCache: renderModel.taskCache,
+    manualDispatchJobs: renderModel.manualDispatchJobs
   });
   const lock: GitHubLock = {
     version: GENERATOR_VERSION,
@@ -82,7 +85,8 @@ export async function renderGitHubWorkflow(pipeline: NormalizedPipeline, options
     packageManager: renderModel.packageManager,
     buildCommand: renderModel.buildCommand,
     nodeVersion: renderModel.nodeVersion,
-    taskCache: renderModel.taskCache
+    taskCache: renderModel.taskCache,
+    manualDispatchJobs: renderModel.manualDispatchJobs
   };
   return {
     workflowPath,
@@ -140,17 +144,19 @@ export async function readGitHubEventContext(env: NodeJS.ProcessEnv): Promise<Gi
     baseRef: env.ASYNC_PIPELINE_GITHUB_BASE_REF ?? env.GITHUB_BASE_REF,
     headRef: env.ASYNC_PIPELINE_GITHUB_HEAD_REF ?? env.GITHUB_HEAD_REF,
     schedule: env.ASYNC_PIPELINE_GITHUB_SCHEDULE,
+    selectedJob: env.ASYNC_PIPELINE_GITHUB_JOB ?? workflowDispatchInput(payload, "job"),
     payload
   };
 }
 
 export function jobsForGitHubEvent(pipeline: NormalizedPipeline, context: GitHubEventContext): NormalizedJob[] {
   if (context.eventName === "workflow_dispatch") {
-    // Dispatch is not "run everything": only jobs that declare a manual trigger
-    // run implicitly. Anything else must be selected explicitly (github run --job).
-    return Object.values(pipeline.jobs)
-      .filter((job) => job.trigger.some((triggerId) => pipeline.triggers[triggerId]?.type === "manual"))
-      .sort((left, right) => left.id.localeCompare(right.id));
+    // Dispatch is never "run everything". Generated workflows expose a required
+    // job selector, and the CLI mirrors that event shape for github run.
+    if (!context.selectedJob) return [];
+    const selected = pipeline.jobs[context.selectedJob];
+    if (!selected || !selected.trigger.some((triggerId) => pipeline.triggers[triggerId]?.type === "manual")) return [];
+    return [selected];
   }
 
   const matches: NormalizedJob[] = [];
@@ -172,6 +178,10 @@ function buildRenderModel(
 ) {
   const usedTriggerIds = new Set<TriggerId>(Object.values(pipeline.jobs).flatMap((job) => job.trigger));
   const usedTriggers = Object.fromEntries([...usedTriggerIds].sort().map((triggerId) => [triggerId, pipeline.triggers[triggerId]]));
+  const manualDispatchJobs = Object.values(pipeline.jobs)
+    .filter((job) => job.trigger.some((triggerId) => pipeline.triggers[triggerId]?.type === "manual"))
+    .map((job) => job.id)
+    .sort((left, right) => left.localeCompare(right));
   return {
     name: "Async Pipeline",
     configPath: options.configPath,
@@ -193,7 +203,8 @@ function buildRenderModel(
     packageManager: options.packageManager,
     buildCommand: options.buildCommand,
     nodeVersion: pipeline.sync.github.nodeVersion ?? DEFAULT_NODE_VERSION,
-    taskCache: pipeline.sync.github.cache ?? true
+    taskCache: pipeline.sync.github.cache ?? true,
+    manualDispatchJobs
   };
 }
 
@@ -230,7 +241,7 @@ function renderWorkflow(model: ReturnType<typeof buildRenderModel>): string {
     "",
     "on:"
   ];
-  renderOn(lines, model.triggers);
+  renderOn(lines, model.triggers, model.manualDispatchJobs);
   lines.push(
     "",
     "permissions:",
@@ -238,7 +249,12 @@ function renderWorkflow(model: ReturnType<typeof buildRenderModel>): string {
     "",
     "jobs:"
   );
-  for (const job of model.jobs) renderJob(lines, model, job);
+  for (const job of model.jobs) {
+    renderJob(lines, model, job);
+    if (job.github?.pages) {
+      renderPagesDeployJob(lines, job);
+    }
+  }
   return `${lines.join("\n")}`;
 }
 
@@ -351,6 +367,72 @@ function renderJob(lines: string[], model: ReturnType<typeof buildRenderModel>, 
       lines.push(`          ${name}: ${rendered}`);
     }
   }
+  if (job.github?.pages) {
+    lines.push("");
+    renderPagesBuildSteps(lines, job.github.pages);
+  }
+  lines.push("");
+}
+
+function renderPagesBuildSteps(lines: string[], pages: GitHubPagesConfig): void {
+  lines.push(
+    "      - name: Configure Pages",
+    "        uses: actions/configure-pages@v5",
+    ""
+  );
+  if (pages.build.kind === "jekyll") {
+    lines.push(
+      "      - name: Build with Jekyll",
+      "        uses: actions/jekyll-build-pages@v1",
+      "        with:",
+      `          source: ${JSON.stringify(pages.build.source)}`,
+      `          destination: ${JSON.stringify(pages.build.destination ?? "./_site")}`,
+      ""
+    );
+  }
+  const artifactPath = pages.build.kind === "jekyll" ? pages.build.destination ?? "./_site" : pages.build.path;
+  lines.push(
+    "      - name: Upload Pages artifact",
+    "        uses: actions/upload-pages-artifact@v4",
+    "        with:",
+    `          path: ${JSON.stringify(artifactPath)}`
+  );
+  if (pages.artifactName) {
+    lines.push(`          name: ${JSON.stringify(pages.artifactName)}`);
+  }
+}
+
+function renderPagesDeployJob(lines: string[], job: ReturnType<typeof buildRenderModel>["jobs"][number]): void {
+  const pages = job.github?.pages;
+  if (!pages) return;
+  const deployJobId = `${job.id}-deploy`;
+  lines.push(
+    `  ${yamlKey(deployJobId)}:`,
+    `    name: ${deployJobId}`,
+    `    needs: ${JSON.stringify(job.id)}`,
+    "    if: github.event_name != 'pull_request'",
+    "    runs-on: ubuntu-latest"
+  );
+  const environment = pages.environment ?? {
+    name: "github-pages",
+    url: "${{ steps.deployment.outputs.page_url }}"
+  };
+  renderGitHubEnvironment(lines, environment);
+  lines.push(
+    "    permissions:",
+    "      pages: write",
+    "      id-token: write",
+    "    steps:",
+    "      - name: Deploy to GitHub Pages",
+    "        id: deployment",
+    "        uses: actions/deploy-pages@v4"
+  );
+  if (pages.artifactName) {
+    lines.push(
+      "        with:",
+      `          artifact_name: ${JSON.stringify(pages.artifactName)}`
+    );
+  }
   lines.push("");
 }
 
@@ -375,7 +457,7 @@ function renderGitHubEnvValue(value: EnvValue): string | undefined {
   return undefined;
 }
 
-function renderOn(lines: string[], triggers: Record<string, unknown>): void {
+function renderOn(lines: string[], triggers: Record<string, unknown>, manualDispatchJobs: string[]): void {
   for (const [event, value] of Object.entries(triggers)) {
     if (event === "schedule" && Array.isArray(value)) {
       lines.push("  schedule:");
@@ -387,6 +469,19 @@ function renderOn(lines: string[], triggers: Record<string, unknown>): void {
     }
     if (event === "workflow_dispatch") {
       lines.push("  workflow_dispatch:");
+      if (manualDispatchJobs.length > 0) {
+        lines.push(
+          "    inputs:",
+          "      job:",
+          "        description: \"Pipeline job to run\"",
+          "        required: true",
+          "        type: choice",
+          "        options:"
+        );
+        for (const jobId of manualDispatchJobs) {
+          lines.push(`          - ${JSON.stringify(jobId)}`);
+        }
+      }
       continue;
     }
     const filters = value as Record<string, unknown>;
@@ -432,7 +527,7 @@ function renderGitHubJobCondition(job: NormalizedJob, triggers: Record<TriggerId
   const clauses = job.trigger.flatMap((triggerId) => {
     const trigger = triggers[triggerId];
     if (!trigger) return [];
-    if (trigger.type === "manual") return ["github.event_name == 'workflow_dispatch'"];
+    if (trigger.type === "manual") return [`github.event_name == 'workflow_dispatch' && github.event.inputs.job == '${escapeExpressionString(job.id)}'`];
     if (trigger.type === "schedule") {
       return trigger.cron
         ? [`github.event_name == 'schedule' && github.event.schedule == '${escapeExpressionString(trigger.cron)}'`]
@@ -454,6 +549,14 @@ function renderGitHubJobCondition(job: NormalizedJob, triggers: Record<TriggerId
   });
   if (clauses.length === 0) return undefined;
   return clauses.length === 1 ? clauses[0] : clauses.map((clause) => `(${clause})`).join(" || ");
+}
+
+function workflowDispatchInput(payload: unknown, name: string): string | undefined {
+  if (!payload || typeof payload !== "object") return undefined;
+  const inputs = (payload as { inputs?: unknown }).inputs;
+  if (!inputs || typeof inputs !== "object") return undefined;
+  const value = (inputs as Record<string, unknown>)[name];
+  return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 function branchForEvent(context: GitHubEventContext): string | undefined {

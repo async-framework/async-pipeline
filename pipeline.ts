@@ -242,7 +242,7 @@ export default definePipeline({
     }),
     publish: job({
       target: "publish",
-      trigger: ["manual"],
+      trigger: ["manual", "release"],
       environment: {
         name: "npm-publish",
         url: "https://www.npmjs.com/package/@async/pipeline"

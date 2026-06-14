@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // Mechanical release-drift checks. Fails when metadata that must move together drifts apart:
-// 1. The published package version must have a CHANGELOG.md entry.
-// 2. The engines.node floor must be identical across all package.json files.
-// 3. Generated GitHub workflows must install Node at or above the engines floor.
+// 1. The workspace version must match the published package version.
+// 2. The published package version must have a CHANGELOG.md entry.
+// 3. The engines.node floor must be identical across all package.json files.
+// 4. Generated GitHub workflows must install Node at or above the engines floor.
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -17,14 +18,20 @@ async function readJson(path) {
   return JSON.parse(await readFile(join(root, path), "utf8"));
 }
 
-// 1. Version <-> CHANGELOG.
+// 1. Workspace version <-> published package version.
+const workspace = await readJson("package.json");
 const published = await readJson("packages/pipeline/package.json");
+if (workspace.version !== published.version) {
+  fail(`package.json is version ${workspace.version} but packages/pipeline/package.json is version ${published.version}.`);
+}
+
+// 2. Version <-> CHANGELOG.
 const changelog = await readFile(join(root, "CHANGELOG.md"), "utf8");
 if (!new RegExp(`^## ${published.version.replaceAll(".", "\\.")}( |$)`, "m").test(changelog)) {
   fail(`packages/pipeline is version ${published.version} but CHANGELOG.md has no "## ${published.version}" entry.`);
 }
 
-// 2. Engines floor consistency.
+// 3. Engines floor consistency.
 const packagePaths = ["package.json"];
 for (const entry of await readdir(join(root, "packages"), { withFileTypes: true })) {
   if (entry.isDirectory()) packagePaths.push(join("packages", entry.name, "package.json"));
@@ -45,7 +52,7 @@ if (!floorMatch) {
 }
 const floor = floorMatch ? Number(floorMatch[1]) : Number.NaN;
 
-// 3. Workflow Node versions respect the floor.
+// 4. Workflow Node versions respect the floor.
 async function collectWorkflows(dir) {
   const found = [];
   let entries;

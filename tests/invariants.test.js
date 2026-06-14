@@ -348,7 +348,11 @@ test("PROMISE: the release chain publishes GitHub Packages before npm, and previ
 
   assert.deepEqual(pipeline.jobs["preview"].trigger, ["pr"]);
   assert.deepEqual(pipeline.jobs["snapshot"].trigger, ["main"]);
-  assert.deepEqual(pipeline.jobs["publish"].trigger, ["manual"]);
+  assert.deepEqual(
+    pipeline.jobs["publish"].trigger,
+    ["manual", "release"],
+    "stable GitHub releases must invoke the publish chain, while manual dispatch remains available for re-runs"
+  );
 
   // Publishing jobs must hold packages:write or GitHub Packages rejects them.
   assert.equal(pipeline.jobs["preview"].github.permissions.packages, "write");

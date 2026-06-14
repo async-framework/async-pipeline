@@ -8,6 +8,11 @@
 - Task groups: nested `tasks` objects flatten with `.` (`claims.index` -> `claims`, `claims.report` -> `claims.report`), group-local dependencies resolve before graph validation, and `:` remains reserved for source namespaces such as `storefront:claims.report`.
 - Optional section factories (`tasks`, `jobs`, `triggers`, `sources`, `taskDefaults`, `agents`, `sandboxes`) support advanced composition without requiring ceremony in normal object-literal configs.
 
+### Fixes
+
+- Wire the publish job to GitHub `release` events as well as manual dispatch, so a tagged stable release runs the GitHub Packages mirror before npm publishing and still enforces release tag/package version parity.
+- Keep the private workspace package version in lockstep with the published `@async/pipeline` package during release-drift checks.
+
 ## 0.2.4 - 2026-06-13
 
 ### Features
